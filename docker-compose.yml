@@ -1,0 +1,94 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: discord-gif-bot
+    restart: unless-stopped
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - CLIENT_ID=${CLIENT_ID}
+      - CDN_BASE_URL=${CDN_BASE_URL:-http://localhost:3000/gifs}
+      - SERVER_PORT=3000
+      - GIF_STORAGE_PATH=./data/gifs
+      - MAX_GIF_WIDTH=${MAX_GIF_WIDTH:-720}
+      - MAX_GIF_DURATION=${MAX_GIF_DURATION:-30}
+      - DEFAULT_FPS=${DEFAULT_FPS:-15}
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
+      - STATS_USERNAME=${STATS_USERNAME:-}
+      - STATS_PASSWORD=${STATS_PASSWORD:-}
+    volumes:
+      - ./data:/app/data
+      - ./temp:/app/temp
+      - ./logs:/app/logs
+    ports:
+      - '3000:3000'
+    networks:
+      - gif-bot-network
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})",
+        ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  webui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: discord-gif-bot-webui
+    restart: unless-stopped
+    environment:
+      - WEBUI_PORT=3001
+      - WEBUI_HOST=0.0.0.0
+      - MAIN_SERVER_URL=http://app:3000
+      - STATS_USERNAME=${STATS_USERNAME:-}
+      - STATS_PASSWORD=${STATS_PASSWORD:-}
+    ports:
+      # Only accessible from localhost on host machine, NOT exposed via cloudflared
+      - '127.0.0.1:3001:3001'
+    networks:
+      - gif-bot-network
+    depends_on:
+      app:
+        condition: service_healthy
+    profiles:
+      - webui
+    # Note: Start with: docker compose --profile webui up
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-tunnel
+    restart: unless-stopped
+    # Use config file for ingress rules
+    # TUNNEL_TOKEN env var will be used if set, otherwise config file credentials will be used
+    command: tunnel --config /etc/cloudflared/config.yml run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
+    volumes:
+      - ./config/cloudflared-config.yml:/etc/cloudflared/config.yml:ro
+      - ./config/credentials.json:/etc/cloudflared/credentials.json:ro
+    networks:
+      - gif-bot-network
+    depends_on:
+      app:
+        condition: service_healthy
+    profiles:
+      - tunnel
+    # Note: Start with: docker compose --profile tunnel up
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  cloudflared-credentials:
+
+networks:
+  gif-bot-network:
+    driver: bridge

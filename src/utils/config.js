@@ -1,0 +1,244 @@
+import dotenv from 'dotenv';
+import { ConfigurationError } from './errors.js';
+
+// Load environment variables
+dotenv.config();
+
+/**
+ * Validate and parse integer environment variable
+ * @param {string} name - Environment variable name
+ * @param {number} defaultValue - Default value if not set
+ * @param {number} min - Minimum allowed value
+ * @param {number} max - Maximum allowed value
+ * @returns {number} Parsed integer value
+ */
+function parseIntEnv(name, defaultValue, min = -Infinity, max = Infinity) {
+  const value = process.env[name];
+  if (!value) {
+    return defaultValue;
+  }
+
+  const parsed = parseInt(value, 10);
+  if (isNaN(parsed) || !isFinite(parsed)) {
+    throw new ConfigurationError(
+      `${name} must be a valid integer, got: ${value}`,
+      'INVALID_INTEGER'
+    );
+  }
+
+  if (parsed < min) {
+    throw new ConfigurationError(
+      `${name} must be at least ${min}, got: ${parsed}`,
+      'VALUE_TOO_LOW'
+    );
+  }
+
+  if (parsed > max) {
+    throw new ConfigurationError(
+      `${name} must be at most ${max}, got: ${parsed}`,
+      'VALUE_TOO_HIGH'
+    );
+  }
+
+  return parsed;
+}
+
+/**
+ * Validate required string environment variable
+ * @param {string} name - Environment variable name
+ * @param {string} description - Description for error message
+ * @returns {string} Environment variable value
+ * @throws {ConfigurationError} If variable is not set
+ */
+function requireStringEnv(name, description) {
+  const value = process.env[name];
+  if (!value || value.trim() === '') {
+    throw new ConfigurationError(`${name} is required: ${description}`, 'MISSING_REQUIRED_VAR');
+  }
+  return value.trim();
+}
+
+/**
+ * Get optional string environment variable with default
+ * @param {string} name - Environment variable name
+ * @param {string} defaultValue - Default value if not set
+ * @returns {string} Environment variable value or default
+ */
+function getStringEnv(name, defaultValue) {
+  const value = process.env[name];
+  return value ? value.trim() : defaultValue;
+}
+
+/**
+ * Parse comma-separated list of IDs from environment variable
+ * @param {string} name - Environment variable name
+ * @returns {string[]} Array of trimmed IDs
+ */
+function parseIdList(name) {
+  const value = process.env[name];
+  if (!value || value.trim() === '') {
+    return [];
+  }
+  return value
+    .split(',')
+    .map(id => id.trim())
+    .filter(id => id.length > 0);
+}
+
+/**
+ * Get CORS origin from CDN_BASE_URL or explicit CORS_ORIGIN
+ * @returns {string} CORS origin value
+ */
+function getCorsOrigin() {
+  const explicitOrigin = process.env.CORS_ORIGIN;
+  if (explicitOrigin) {
+    return explicitOrigin.trim();
+  }
+
+  const cdnBaseUrl = getStringEnv('CDN_BASE_URL', 'http://localhost:3000/gifs');
+  try {
+    const url = new URL(cdnBaseUrl);
+    // If localhost, allow all origins
+    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+      return '*';
+    }
+    // Extract origin (protocol + hostname + port if not default)
+    const origin = `${url.protocol}//${url.hostname}${url.port ? `:${url.port}` : ''}`;
+    return origin;
+  } catch {
+    // If URL parsing fails, default to '*' for safety
+    return '*';
+  }
+}
+
+/**
+ * Validate URL format
+ * @param {string} url - URL to validate
+ * @returns {boolean} True if URL is valid
+ */
+function validateUrlFormat(url) {
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Bot configuration - lazy loaded to avoid requiring DISCORD_TOKEN for webui
+let _botConfig = null;
+function getBotConfig() {
+  if (_botConfig) return _botConfig;
+
+  _botConfig = {
+    discordToken: requireStringEnv(
+      'DISCORD_TOKEN',
+      'Discord bot token from https://discord.com/developers/applications'
+    ),
+    clientId: requireStringEnv('CLIENT_ID', 'Discord application/client ID'),
+    adminUserIds: parseIdList('ADMIN_USER_IDS'),
+    gifStoragePath: getStringEnv('GIF_STORAGE_PATH', './data/gifs'),
+    cdnBaseUrl: getStringEnv('CDN_BASE_URL', 'http://localhost:3000/gifs'),
+    maxGifWidth: parseIntEnv('MAX_GIF_WIDTH', 720, 1, 4096),
+    maxGifDuration: parseIntEnv('MAX_GIF_DURATION', 30, 1, 300),
+    defaultFps: parseIntEnv('DEFAULT_FPS', 15, 1, 120),
+    maxVideoSize: 500 * 1024 * 1024, // 500MB
+    maxImageSize: 50 * 1024 * 1024, // 50MB
+    rateLimitCooldown: 30000, // 30 seconds
+  };
+
+  // Validate CDN_BASE_URL format
+  if (!validateUrlFormat(_botConfig.cdnBaseUrl)) {
+    throw new ConfigurationError(
+      `CDN_BASE_URL must be a valid URL, got: ${_botConfig.cdnBaseUrl}`,
+      'INVALID_URL'
+    );
+  }
+
+  return _botConfig;
+}
+
+// Export as getter property for backward compatibility
+export const botConfig = new Proxy(
+  {},
+  {
+    get(target, prop) {
+      return getBotConfig()[prop];
+    },
+    ownKeys() {
+      return Object.keys(getBotConfig());
+    },
+    getOwnPropertyDescriptor() {
+      return { enumerable: true, configurable: true };
+    },
+  }
+);
+
+// Server configuration
+export const serverConfig = {
+  gifStoragePath: getStringEnv('GIF_STORAGE_PATH', './data/gifs'),
+  serverPort: parseIntEnv('SERVER_PORT', 3000, 1, 65535),
+  serverHost: getStringEnv('SERVER_HOST', '0.0.0.0'),
+  statsUsername: getStringEnv('STATS_USERNAME', null),
+  statsPassword: getStringEnv('STATS_PASSWORD', null),
+  corsOrigin: getCorsOrigin(),
+  cdnBaseUrl: getStringEnv('CDN_BASE_URL', 'http://localhost:3000/gifs'),
+};
+
+// Validate CDN_BASE_URL format for server
+if (!validateUrlFormat(serverConfig.cdnBaseUrl)) {
+  throw new ConfigurationError(
+    `CDN_BASE_URL must be a valid URL, got: ${serverConfig.cdnBaseUrl}`,
+    'INVALID_URL'
+  );
+}
+
+// WebUI configuration
+export const webuiConfig = {
+  webuiPort: parseIntEnv('WEBUI_PORT', 3001, 1, 65535),
+  webuiHost: getStringEnv('WEBUI_HOST', '127.0.0.1'),
+  mainServerUrl: getStringEnv('MAIN_SERVER_URL', 'http://localhost:3000'),
+};
+
+// Validate MAIN_SERVER_URL format
+if (!validateUrlFormat(webuiConfig.mainServerUrl)) {
+  throw new ConfigurationError(
+    `MAIN_SERVER_URL must be a valid URL, got: ${webuiConfig.mainServerUrl}`,
+    'INVALID_URL'
+  );
+}
+
+// Logger configuration
+export const loggerConfig = {
+  logDir: getStringEnv('LOG_DIR', './logs'),
+  logLevel: getStringEnv('LOG_LEVEL', 'INFO').toUpperCase(),
+  logRotation: getStringEnv('LOG_ROTATION', 'daily'),
+};
+
+// Validate log level
+const validLogLevels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+if (!validLogLevels.includes(loggerConfig.logLevel)) {
+  throw new ConfigurationError(
+    `LOG_LEVEL must be one of: ${validLogLevels.join(', ')}, got: ${loggerConfig.logLevel}`,
+    'INVALID_LOG_LEVEL'
+  );
+}
+
+// Validate log rotation
+const validRotations = ['daily', 'none'];
+if (!validRotations.includes(loggerConfig.logRotation)) {
+  throw new ConfigurationError(
+    `LOG_ROTATION must be one of: ${validRotations.join(', ')}, got: ${loggerConfig.logRotation}`,
+    'INVALID_LOG_ROTATION'
+  );
+}
+
+// Export all config as a single object for convenience
+export const config = {
+  get bot() {
+    return getBotConfig();
+  },
+  server: serverConfig,
+  webui: webuiConfig,
+  logger: loggerConfig,
+};

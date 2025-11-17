@@ -1,0 +1,463 @@
+import express from 'express';
+import path from 'path';
+import fs from 'fs/promises';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import rateLimit from 'express-rate-limit';
+import { getStorageStats } from './utils/storage.js';
+import { createLogger, formatTimestampSeconds } from './utils/logger.js';
+import { serverConfig } from './utils/config.js';
+import { validateFilename } from './utils/validation.js';
+import { ConfigurationError } from './utils/errors.js';
+
+const execAsync = promisify(exec);
+
+// Initialize logger
+const logger = createLogger('server');
+
+// Configuration from centralized config
+const {
+  gifStoragePath: GIF_STORAGE_PATH,
+  serverPort: SERVER_PORT,
+  serverHost: HOST,
+  statsUsername: STATS_USERNAME,
+  statsPassword: STATS_PASSWORD,
+  corsOrigin: CORS_ORIGIN,
+} = serverConfig;
+
+const app = express();
+
+// Trust proxy for proper IP detection in Docker network
+app.set('trust proxy', true);
+
+// Configure body parser with size limits (defensive measure)
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Security headers middleware
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('X-XSS-Protection', '1; mode=block');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  next();
+});
+
+// Rate limiting configurations
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50, // Limit each IP to 50 requests per windowMs
+  message: 'too many requests from this IP, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const cdnLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200, // Higher limit for CDN endpoints (main purpose)
+  message: 'too many requests from this IP, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const statsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Very strict limit for sensitive stats endpoint
+  message: 'too many requests from this IP, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for requests from internal Docker network (webui container)
+    // Check multiple IP sources
+    const ip = req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || '';
+    const ipStr = String(ip);
+
+    // Check for Docker network IPs (172.16.0.0/12, 192.168.0.0/16, 10.0.0.0/8)
+    // Also check if request has Authorization header (webui always sends it)
+    const hasAuth = req.headers.authorization && req.headers.authorization.startsWith('Basic ');
+
+    if (ipStr.startsWith('172.') ||
+        ipStr.startsWith('192.168.') ||
+        ipStr.startsWith('10.') ||
+        ipStr.includes('::ffff:172.') ||
+        ipStr.includes('::ffff:192.168.') ||
+        ipStr.includes('::ffff:10.') ||
+        hasAuth) {
+      return true;
+    }
+
+    return false;
+  },
+});
+
+// Apply general rate limiting to all requests
+app.use(generalLimiter);
+
+// Request logging middleware
+app.use((req, res, next) => {
+  // Skip logging for health check requests
+  if (req.path === '/health') {
+    return next();
+  }
+
+  const startTime = Date.now();
+  let logged = false;
+
+  // Log response when finished (most reliable method)
+  const logResponse = () => {
+    if (logged) return;
+    logged = true;
+    const duration = Date.now() - startTime;
+    const statusCode = res.statusCode || 200;
+    logger.info(
+      `${req.method} ${req.path} - ${statusCode} - ${duration}ms - ${req.ip || req.connection.remoteAddress}`
+    );
+  };
+
+  // Intercept response methods as backup (in case finish event doesn't fire)
+  const originalSend = res.send;
+  const originalSendFile = res.sendFile;
+  const originalJson = res.json;
+
+  res.send = function (_data) {
+    logResponse();
+    return originalSend.apply(this, arguments);
+  };
+
+  res.sendFile = function (...args) {
+    logResponse();
+    return originalSendFile.apply(this, args);
+  };
+
+  res.json = function (_data) {
+    logResponse();
+    return originalJson.apply(this, arguments);
+  };
+
+  // Primary logging on response finish (catches all cases)
+  res.on('finish', logResponse);
+
+  next();
+});
+
+// Get absolute path to GIF storage
+function getStoragePath() {
+  if (path.isAbsolute(GIF_STORAGE_PATH)) {
+    return GIF_STORAGE_PATH;
+  }
+  return path.resolve(process.cwd(), GIF_STORAGE_PATH);
+}
+
+const storagePath = getStoragePath();
+
+/**
+ * Basic authentication middleware for sensitive endpoints
+ * @param {Request} req - Express request
+ * @param {Response} res - Express response
+ * @param {Function} next - Next middleware
+ */
+function basicAuth(req, res, next) {
+  if (!STATS_USERNAME || !STATS_PASSWORD) {
+    // No auth configured, allow access
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    res.set('WWW-Authenticate', 'Basic realm="Stats API"');
+    return res.status(401).json({ error: 'authentication required' });
+  }
+
+  const credentials = Buffer.from(authHeader.substring(6), 'base64').toString('utf-8');
+  const [username, password] = credentials.split(':');
+
+  if (username === STATS_USERNAME && password === STATS_PASSWORD) {
+    return next();
+  }
+
+  res.set('WWW-Authenticate', 'Basic realm="Stats API"');
+  return res.status(401).json({ error: 'invalid credentials' });
+}
+
+// Get absolute path to public directory
+const publicPath = path.resolve(process.cwd(), 'src', 'public');
+
+// Serve static HTML files from public directory
+app.use(
+  express.static(publicPath, {
+    maxAge: '1h', // Cache for 1 hour
+    etag: true,
+    lastModified: true,
+  })
+);
+
+// Serve 404 cat image for /gifs/ route
+app.get('/gifs', cdnLimiter, (req, res) => {
+  res.type('image/jpeg');
+  res.sendFile(path.join(publicPath, '404.jpg'));
+});
+
+app.get('/gifs/', cdnLimiter, (req, res) => {
+  res.type('image/jpeg');
+  res.sendFile(path.join(publicPath, '404.jpg'));
+});
+
+// Custom handler for /gifs/*.gif requests - check if file exists, serve cat image if not
+app.get('/gifs/:filename', cdnLimiter, async (req, res) => {
+  const filename = req.params.filename;
+
+  // Validate filename to prevent path traversal
+  const validation = validateFilename(filename, storagePath);
+  if (!validation.valid) {
+    logger.warn(`Invalid filename attempt: ${filename} - ${validation.error}`);
+    res.status(400);
+    res.type('image/jpeg');
+    res.sendFile(path.join(publicPath, '404.jpg'));
+    return;
+  }
+
+  const filePath = validation.filePath;
+
+  try {
+    // Check if file exists
+    await fs.access(filePath);
+    // File exists, serve it with proper headers
+    logger.debug(`Serving GIF: ${filename}`);
+    res.set('Cache-Control', 'public, max-age=604800, immutable');
+    res.set('Access-Control-Allow-Origin', CORS_ORIGIN);
+    res.set('Content-Type', 'image/gif');
+    res.sendFile(filePath);
+  } catch {
+    // File doesn't exist, serve cat image
+    logger.warn(`GIF not found: ${filename}`);
+    res.status(404);
+    res.type('image/jpeg');
+    res.sendFile(path.join(publicPath, '404.jpg'));
+  }
+});
+
+/**
+ * Check if FFmpeg is available
+ * @returns {Promise<boolean>} True if FFmpeg is available
+ */
+async function checkFFmpegAvailable() {
+  try {
+    await execAsync('ffmpeg -version');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get disk space information
+ * @param {string} dirPath - Directory path to check
+ * @returns {Promise<Object>} Disk space info
+ */
+async function getDiskSpace(dirPath) {
+  try {
+    // Check if we can write to the directory
+    // This is a simple check - full disk space monitoring would require platform-specific code
+    await fs.access(dirPath, fs.constants.W_OK);
+    return { available: true, error: null };
+  } catch (error) {
+    return { available: false, error: error.message };
+  }
+}
+
+/**
+ * Check storage directory accessibility
+ * @param {string} dirPath - Directory path to check
+ * @returns {Promise<Object>} Accessibility info
+ */
+async function checkStorageAccess(dirPath) {
+  try {
+    await fs.access(dirPath, fs.constants.R_OK | fs.constants.W_OK);
+    return { accessible: true, error: null };
+  } catch (error) {
+    return { accessible: false, error: error.message };
+  }
+}
+
+// Enhanced health check endpoint
+app.get('/health', async (req, res) => {
+  const uptime = process.uptime();
+  logger.debug('Health check requested');
+
+  const health = {
+    status: 'ok',
+    uptime: Math.floor(uptime),
+    timestamp: formatTimestampSeconds(),
+    components: {
+      server: { status: 'ok' },
+      storage: { status: 'unknown' },
+      ffmpeg: { status: 'unknown' },
+    },
+  };
+
+  try {
+    // Check storage directory
+    const storageCheck = await checkStorageAccess(storagePath);
+    health.components.storage = {
+      status: storageCheck.accessible ? 'ok' : 'error',
+      path: storagePath,
+      error: storageCheck.error || null,
+    };
+
+    // Check FFmpeg
+    const ffmpegAvailable = await checkFFmpegAvailable();
+    health.components.ffmpeg = {
+      status: ffmpegAvailable ? 'ok' : 'error',
+      available: ffmpegAvailable,
+    };
+
+    // Check disk space
+    const diskSpace = await getDiskSpace(storagePath);
+    health.components.disk = {
+      status: diskSpace.available ? 'ok' : 'warning',
+      available: diskSpace.available,
+      error: diskSpace.error || null,
+    };
+
+    // Overall status
+    const allOk =
+      health.components.storage.status === 'ok' &&
+      health.components.ffmpeg.status === 'ok' &&
+      health.components.disk.status !== 'error';
+
+    if (!allOk) {
+      health.status = 'degraded';
+      res.status(503);
+    }
+  } catch (error) {
+    logger.error('Health check error:', error);
+    health.status = 'error';
+    health.error = error.message;
+    res.status(503);
+  }
+
+  res.json(health);
+});
+
+// API health endpoint (for dashboard)
+app.get('/api/health', (req, res) => {
+  const uptime = process.uptime();
+  logger.debug('API health check requested');
+  res.json({
+    status: 'ok',
+    uptime: Math.floor(uptime),
+    timestamp: formatTimestampSeconds(),
+  });
+});
+
+// Stats endpoint (optional) - protected with basic auth if configured
+app.get('/stats', statsLimiter, basicAuth, async (req, res) => {
+  try {
+    logger.debug('Stats requested');
+    const stats = await getStorageStats(GIF_STORAGE_PATH);
+    res.json({
+      total_gifs: stats.totalGifs,
+      disk_usage_formatted: stats.diskUsageFormatted,
+      storage_path: storagePath,
+    });
+  } catch (error) {
+    logger.error('Failed to get stats:', error);
+    res.status(500).json({
+      error: 'Failed to get stats',
+      message: error.message,
+    });
+  }
+});
+
+// API stats endpoint (for dashboard) - protected with basic auth if configured
+app.get('/api/stats', statsLimiter, basicAuth, async (req, res) => {
+  try {
+    logger.debug('API stats requested');
+    const stats = await getStorageStats(GIF_STORAGE_PATH);
+    res.json({
+      total_gifs: stats.totalGifs,
+      disk_usage_formatted: stats.diskUsageFormatted,
+      storage_path: storagePath,
+    });
+  } catch (error) {
+    logger.error('Failed to get API stats:', error);
+    res.status(500).json({
+      error: 'Failed to get stats',
+      message: error.message,
+    });
+  }
+});
+
+// Terms of Service route
+app.get('/terms', (req, res) => {
+  logger.debug('Terms of Service page requested');
+  res.sendFile(path.join(publicPath, 'terms.html'));
+});
+
+// Privacy Policy route
+app.get('/privacy', (req, res) => {
+  logger.debug('Privacy Policy page requested');
+  res.sendFile(path.join(publicPath, 'privacy.html'));
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  logger.debug('Root endpoint requested');
+  res.json({
+    service: 'discord gif cdn',
+    endpoints: {
+      health: '/health',
+      stats: '/stats',
+      gifs: '/gifs/{hash}.gif',
+      terms: '/terms',
+      privacy: '/privacy',
+    },
+  });
+});
+
+// 404 handler - serve cat image for all unmatched routes
+app.use((req, res) => {
+  res.status(404);
+  res.type('image/jpeg');
+  res.sendFile(path.join(publicPath, '404.jpg'));
+});
+
+// Validate configuration
+try {
+  // Config validation happens during import
+  if (!GIF_STORAGE_PATH || !SERVER_PORT) {
+    throw new ConfigurationError('Required server configuration missing');
+  }
+} catch (error) {
+  if (error instanceof ConfigurationError) {
+    logger.error('Configuration error:', error.message);
+  } else {
+    logger.error('Failed to load configuration:', error);
+  }
+  process.exit(1);
+}
+
+// Start server
+app.listen(SERVER_PORT, HOST, () => {
+  logger.info(`cdn server running on http://${HOST}:${SERVER_PORT}`);
+  logger.info(`serving gifs from: ${storagePath}`);
+  logger.info(`health check: http://${HOST}:${SERVER_PORT}/health`);
+  logger.info(`stats: http://${HOST}:${SERVER_PORT}/stats`);
+});
+
+// Handle errors
+app.on('error', error => {
+  logger.error('Server error:', error);
+});
+
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received, shutting down gracefully...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  logger.info('SIGINT received, shutting down gracefully...');
+  process.exit(0);
+});
