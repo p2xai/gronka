@@ -184,12 +184,28 @@ function basicAuth(req, res, next) {
 // Get absolute path to public directory
 const publicPath = path.resolve(process.cwd(), 'src', 'public');
 
-// Serve static HTML files from public directory
+// Root endpoint - must be before static middleware to return JSON instead of index.html
+app.get('/', (req, res) => {
+  logger.debug('Root endpoint requested');
+  res.json({
+    service: 'discord gif cdn',
+    endpoints: {
+      health: '/health',
+      stats: '/stats',
+      gifs: '/gifs/{hash}.gif',
+      terms: '/terms',
+      privacy: '/privacy',
+    },
+  });
+});
+
+// Serve static HTML files from public directory (but not index.html at root)
 app.use(
   express.static(publicPath, {
     maxAge: '1h', // Cache for 1 hour
     etag: true,
     lastModified: true,
+    index: false, // Don't serve index.html automatically
   })
 );
 
@@ -400,21 +416,6 @@ app.get('/terms', (req, res) => {
 app.get('/privacy', (req, res) => {
   logger.debug('Privacy Policy page requested');
   res.sendFile(path.join(publicPath, 'privacy.html'));
-});
-
-// Root endpoint
-app.get('/', (req, res) => {
-  logger.debug('Root endpoint requested');
-  res.json({
-    service: 'discord gif cdn',
-    endpoints: {
-      health: '/health',
-      stats: '/stats',
-      gifs: '/gifs/{hash}.gif',
-      terms: '/terms',
-      privacy: '/privacy',
-    },
-  });
 });
 
 // 404 handler - serve cat image for all unmatched routes
