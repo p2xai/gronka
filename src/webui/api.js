@@ -69,17 +69,11 @@ export function formatServerStartTime(uptimeSeconds) {
 
 export async function fetchCryptoPrices() {
   try {
-    const response = await fetch(
-      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd'
-    );
+    const response = await fetch('/api/crypto-prices');
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const data = await response.json();
-    return {
-      bitcoin: data.bitcoin?.usd || null,
-      ethereum: data.ethereum?.usd || null,
-    };
+    return await response.json();
   } catch (error) {
     console.error('Failed to fetch crypto prices:', error);
     throw error;
@@ -88,5 +82,5 @@ export async function fetchCryptoPrices() {
 
 export function formatPrice(price) {
   if (price === null || price === undefined) return 'N/A';
-  return `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `$${price.toFixed(2)}`;
 }

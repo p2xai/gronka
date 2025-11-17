@@ -563,81 +563,6 @@ async function handleStatsCommand(interaction) {
 }
 
 /**
- * Handle server stats command
- * @param {Interaction} interaction - Discord interaction
- */
-async function handleServerStatsCommand(interaction) {
-  if (!interaction.guild) {
-    await interaction.reply({
-      content: 'this command can only be used in a server.',
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  try {
-    const guild = interaction.guild;
-    await guild.members.fetch(); // Ensure member cache is populated
-
-    const totalMembers = guild.memberCount;
-    const botCount = guild.members.cache.filter(member => member.user.bot).size;
-    const humanMembers = totalMembers - botCount;
-
-    // Try to get online members, but don't fail if presence data isn't available
-    let onlineMembers = 0;
-    try {
-      onlineMembers = guild.members.cache.filter(member => {
-        const status = member.presence?.status;
-        return status === 'online' || status === 'idle' || status === 'dnd';
-      }).size;
-    } catch {
-      // Presence data might not be available without the Presence intent
-      onlineMembers = guild.members.cache.filter(member => !member.user.bot).size;
-    }
-
-    const channelCount = guild.channels.cache.size;
-    const textChannels = guild.channels.cache.filter(channel => channel.type === 0).size;
-    const voiceChannels = guild.channels.cache.filter(channel => channel.type === 2).size;
-    const roleCount = guild.roles.cache.size;
-    const boostCount = guild.premiumSubscriptionCount || 0;
-    const boostLevel = guild.premiumTier || 0;
-
-    const embed = new EmbedBuilder()
-      .setTitle(`${guild.name} statistics`)
-      .setThumbnail(guild.iconURL())
-      .setColor(0x5865f2)
-      .setDescription('server information and statistics')
-      .addFields(
-        {
-          name: 'members',
-          value: `**total:** \`${totalMembers.toLocaleString()}\`\n**humans:** \`${humanMembers.toLocaleString()}\`\n**bots:** \`${botCount.toLocaleString()}\`\n**online:** \`${onlineMembers.toLocaleString()}\``,
-          inline: true,
-        },
-        {
-          name: 'channels',
-          value: `**total:** \`${channelCount.toLocaleString()}\`\n**text:** \`${textChannels.toLocaleString()}\`\n**voice:** \`${voiceChannels.toLocaleString()}\``,
-          inline: true,
-        },
-        {
-          name: 'other',
-          value: `**roles:** \`${roleCount.toLocaleString()}\`\n**boosts:** \`${boostCount.toLocaleString()}\`\n**boost level:** \`${boostLevel}\``,
-          inline: true,
-        }
-      )
-      .setTimestamp()
-      .setFooter({ text: `server id: ${guild.id}` });
-
-    await interaction.reply({ embeds: [embed] });
-  } catch (error) {
-    logger.error('Failed to get server stats:', error);
-    await interaction.reply({
-      content: 'an error occurred while fetching server statistics.',
-      flags: MessageFlags.Ephemeral,
-    });
-  }
-}
-
-/**
  * Handle slash command interaction
  * @param {Interaction} interaction - Discord interaction
  */
@@ -650,11 +575,6 @@ async function handleSlashCommand(interaction) {
 
   if (commandName === 'stats') {
     await handleStatsCommand(interaction);
-    return;
-  }
-
-  if (commandName === 'serverstats') {
-    await handleServerStatsCommand(interaction);
     return;
   }
 

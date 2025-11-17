@@ -23,8 +23,8 @@ there are three parts to this thing:
 you'll need node.js 20+ and ffmpeg installed. then:
 
 ```bash
-git clone <repository-url>
-cd esm
+git clone https://github.com/p2xai/gronka.git
+cd gronka
 npm install
 cp .env.example .env
 ```
@@ -62,7 +62,6 @@ everything else is optional. check `.env.example` for what you can tweak (output
 
 - `/convert` - attach a file or paste a url to convert it
 - `/stats` - see how many gifs gronka has made
-- `/serverstats` - check server health
 - right-click a message → apps → "convert to gif" - quick convert from any message
 
 ### the cdn

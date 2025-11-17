@@ -53,13 +53,6 @@ const commands = [
     default_member_permissions: null, // Available to everyone
     dm_permission: true, // Enable in DMs
   },
-  {
-    name: 'serverstats',
-    description: 'view server statistics',
-    type: 1, // CHAT_INPUT type (slash command)
-    default_member_permissions: null, // Available to everyone
-    dm_permission: false, // Only works in servers
-  },
 ];
 
 // Construct and prepare an instance of the REST module
@@ -75,7 +68,7 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
     console.log(`successfully registered ${data.length} global application command(s).`);
     console.log(
-      'commands registered: "convert to gif" (context menu), "/convert", "/stats", "/serverstats" (slash commands)'
+      'commands registered: "convert to gif" (context menu), "/convert", "/stats" (slash commands)'
     );
     console.log('it may take up to an hour for the commands to appear in discord.');
   } catch (error) {

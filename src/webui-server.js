@@ -29,6 +29,37 @@ function getAuthHeaders() {
   return headers;
 }
 
+// Crypto price cache
+const CACHE_TTL = 60 * 1000; // 60 seconds
+let cryptoPriceCache = {
+  data: null,
+  timestamp: null,
+};
+
+function isCacheValid() {
+  if (!cryptoPriceCache.data || !cryptoPriceCache.timestamp) {
+    return false;
+  }
+  return Date.now() - cryptoPriceCache.timestamp < CACHE_TTL;
+}
+
+async function fetchCryptoPricesFromAPI() {
+  try {
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd',
+      { timeout: 5000 }
+    );
+    const data = response.data;
+    return {
+      bitcoin: data.bitcoin?.usd || null,
+      ethereum: data.ethereum?.usd || null,
+    };
+  } catch (error) {
+    logger.error('Failed to fetch crypto prices from CoinGecko:', error);
+    throw error;
+  }
+}
+
 const app = express();
 
 // Request logging middleware
@@ -116,6 +147,33 @@ app.get('/api/health', async (req, res) => {
     logger.error('Failed to fetch health from main server:', error);
     res.status(500).json({
       error: 'Failed to fetch health',
+      message: error.message,
+    });
+  }
+});
+
+// Crypto prices endpoint with caching
+app.get('/api/crypto-prices', async (req, res) => {
+  try {
+    if (isCacheValid()) {
+      logger.debug('Returning cached crypto prices');
+      return res.json(cryptoPriceCache.data);
+    }
+
+    logger.debug('Fetching crypto prices from CoinGecko');
+    const prices = await fetchCryptoPricesFromAPI();
+    cryptoPriceCache.data = prices;
+    cryptoPriceCache.timestamp = Date.now();
+    res.json(prices);
+  } catch (error) {
+    logger.error('Failed to fetch crypto prices:', error);
+    // Return cached data if available, even if expired
+    if (cryptoPriceCache.data) {
+      logger.debug('Returning stale cached data due to API error');
+      return res.json(cryptoPriceCache.data);
+    }
+    res.status(500).json({
+      error: 'Failed to fetch crypto prices',
       message: error.message,
     });
   }

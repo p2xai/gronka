@@ -77,8 +77,12 @@
     <dl>
       <div class="stat-item">
         <dt>Status</dt>
-        <dd class="status" class:ok={health.status === 'ok'}>
-          {health.status || 'unknown'}
+        <dd class="status">
+          {#if health.status === 'ok'}
+            <span class="status-ok">OK</span><span class="status-code"> 200</span>
+          {:else}
+            {health.status || 'unknown'}
+          {/if}
         </dd>
       </div>
       <div class="stat-item">
@@ -168,8 +172,12 @@
     font-size: 0.9rem;
   }
 
-  .status.ok {
+  .status-ok {
     color: #51cf66;
+  }
+
+  .status-code {
+    color: #fff;
   }
 
   .crypto-icon {

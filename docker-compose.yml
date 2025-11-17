@@ -51,8 +51,8 @@ services:
       - STATS_USERNAME=${STATS_USERNAME:-}
       - STATS_PASSWORD=${STATS_PASSWORD:-}
     ports:
-      # Only accessible from localhost on host machine, NOT exposed via cloudflared
-      - '127.0.0.1:3001:3001'
+      # Accessible from all interfaces on host machine (server-ip:3001), not exposed via cloudflared
+      - '3001:3001'
     networks:
       - gif-bot-network
     depends_on:
