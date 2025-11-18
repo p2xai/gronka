@@ -24,6 +24,8 @@ const commands = [
     type: 3, // MESSAGE type (right-click on message)
     default_member_permissions: null, // Available to everyone
     dm_permission: true, // Enable in DMs
+    integration_types: [1], // USER_INSTALL - allows users to install the bot directly
+    contexts: [0, 1, 2], // GUILD (0), BOT_DM (1), PRIVATE_CHANNEL (2) - enables command usage in all contexts
   },
   {
     name: 'convert',
@@ -45,6 +47,8 @@ const commands = [
     ],
     default_member_permissions: null, // Available to everyone
     dm_permission: true, // Enable in DMs
+    integration_types: [1], // USER_INSTALL - allows users to install the bot directly
+    contexts: [0, 1, 2], // GUILD (0), BOT_DM (1), PRIVATE_CHANNEL (2) - enables command usage in all contexts
   },
   {
     name: 'stats',
@@ -52,6 +56,8 @@ const commands = [
     type: 1, // CHAT_INPUT type (slash command)
     default_member_permissions: null, // Available to everyone
     dm_permission: true, // Enable in DMs
+    integration_types: [1], // USER_INSTALL - allows users to install the bot directly
+    contexts: [0, 1, 2], // GUILD (0), BOT_DM (1), PRIVATE_CHANNEL (2) - enables command usage in all contexts
   },
 ];
 
