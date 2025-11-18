@@ -471,6 +471,9 @@ app.get('/stats', statsLimiter, basicAuth, async (req, res) => {
       total_videos: stats.totalVideos,
       total_images: stats.totalImages,
       disk_usage_formatted: stats.diskUsageFormatted,
+      gifs_disk_usage_formatted: stats.gifsDiskUsageFormatted,
+      videos_disk_usage_formatted: stats.videosDiskUsageFormatted,
+      images_disk_usage_formatted: stats.imagesDiskUsageFormatted,
       storage_path: storagePath,
     });
   } catch (error) {
@@ -492,6 +495,9 @@ app.get('/api/stats', statsLimiter, basicAuth, async (req, res) => {
       total_videos: stats.totalVideos,
       total_images: stats.totalImages,
       disk_usage_formatted: stats.diskUsageFormatted,
+      gifs_disk_usage_formatted: stats.gifsDiskUsageFormatted,
+      videos_disk_usage_formatted: stats.videosDiskUsageFormatted,
+      images_disk_usage_formatted: stats.imagesDiskUsageFormatted,
       storage_path: storagePath,
     });
   } catch (error) {

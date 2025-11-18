@@ -33,20 +33,24 @@
     <div class="error">Error: {error}</div>
     <button on:click={loadStats}>Retry</button>
   {:else if stats}
-    <dl>
-      <div class="stat-item">
-        <dt>Total GIFs</dt>
-        <dd>{stats.total_gifs?.toLocaleString() || '0'}</dd>
+    <div class="stats-list">
+      <div class="stat-line">
+        <span class="stat-label">GIFs:</span>
+        <span class="stat-value">{stats.total_gifs?.toLocaleString() || '0'} ({stats.gifs_disk_usage_formatted || '0.00 MB'})</span>
       </div>
-      <div class="stat-item">
-        <dt>Disk Usage</dt>
-        <dd>{stats.disk_usage_formatted || '0.00 MB'}</dd>
+      <div class="stat-line">
+        <span class="stat-label">Videos:</span>
+        <span class="stat-value">{stats.videos_disk_usage_formatted || '0.00 MB'}</span>
       </div>
-      <div class="stat-item">
-        <dt>Storage Path</dt>
-        <dd class="path">{stats.storage_path || 'N/A'}</dd>
+      <div class="stat-line">
+        <span class="stat-label">Images:</span>
+        <span class="stat-value">{stats.images_disk_usage_formatted || '0.00 MB'}</span>
       </div>
-    </dl>
+      <div class="stat-line">
+        <span class="stat-label">Total:</span>
+        <span class="stat-value">{stats.disk_usage_formatted || '0.00 MB'}</span>
+      </div>
+    </div>
   {/if}
 </section>
 
@@ -66,42 +70,24 @@
     padding-bottom: 0.25rem;
   }
 
-  dl {
+  .stats-list {
     margin: 0;
     padding: 0;
   }
 
-  .stat-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
+  .stat-line {
     padding: 0.25rem 0;
-    border-bottom: 1px solid #2a2a2a;
-  }
-
-  .stat-item:last-child {
-    border-bottom: none;
-  }
-
-  dt {
-    font-size: 0.9rem;
-    color: #aaa;
-    font-weight: 400;
-  }
-
-  dd {
-    margin: 0;
     font-size: 1rem;
     color: #fff;
-    font-weight: 500;
   }
 
-  .path {
-    font-family: 'Courier New', monospace;
-    font-size: 0.85rem;
-    word-break: break-all;
-    text-align: right;
-    max-width: 60%;
+  .stat-label {
+    font-weight: 500;
+    margin-right: 0.5rem;
+  }
+
+  .stat-value {
+    font-weight: 400;
   }
 
   .loading {

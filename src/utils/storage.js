@@ -259,7 +259,7 @@ export async function saveImage(buffer, hash, extension, storagePath) {
 /**
  * Get storage statistics
  * @param {string} storagePath - Base storage path
- * @returns {Promise<{totalGifs: number, totalVideos: number, totalImages: number, diskUsageBytes: number, diskUsageFormatted: string}>}
+ * @returns {Promise<{totalGifs: number, totalVideos: number, totalImages: number, diskUsageBytes: number, diskUsageFormatted: string, gifsDiskUsageBytes: number, gifsDiskUsageFormatted: string, videosDiskUsageBytes: number, videosDiskUsageFormatted: string, imagesDiskUsageBytes: number, imagesDiskUsageFormatted: string}>}
  */
 export async function getStorageStats(storagePath) {
   try {
@@ -270,6 +270,9 @@ export async function getStorageStats(storagePath) {
     let totalVideos = 0;
     let totalImages = 0;
     let totalSize = 0;
+    let gifsSize = 0;
+    let videosSize = 0;
+    let imagesSize = 0;
 
     // Scan gifs subdirectory
     try {
@@ -282,7 +285,9 @@ export async function getStorageStats(storagePath) {
         try {
           const filePath = path.join(gifsPath, file);
           const stats = await fs.stat(filePath);
-          totalSize += stats.size;
+          const fileSize = stats.size;
+          gifsSize += fileSize;
+          totalSize += fileSize;
         } catch (error) {
           logger.warn(`Failed to stat GIF file ${file}:`, error.message);
         }
@@ -308,7 +313,9 @@ export async function getStorageStats(storagePath) {
         try {
           const filePath = path.join(videosPath, file);
           const stats = await fs.stat(filePath);
-          totalSize += stats.size;
+          const fileSize = stats.size;
+          videosSize += fileSize;
+          totalSize += fileSize;
         } catch (error) {
           logger.warn(`Failed to stat video file ${file}:`, error.message);
         }
@@ -334,7 +341,9 @@ export async function getStorageStats(storagePath) {
         try {
           const filePath = path.join(imagesPath, file);
           const stats = await fs.stat(filePath);
-          totalSize += stats.size;
+          const fileSize = stats.size;
+          imagesSize += fileSize;
+          totalSize += fileSize;
         } catch (error) {
           logger.warn(`Failed to stat image file ${file}:`, error.message);
         }
@@ -351,6 +360,12 @@ export async function getStorageStats(storagePath) {
       totalImages,
       diskUsageBytes: totalSize,
       diskUsageFormatted: formatFileSize(totalSize),
+      gifsDiskUsageBytes: gifsSize,
+      gifsDiskUsageFormatted: formatFileSize(gifsSize),
+      videosDiskUsageBytes: videosSize,
+      videosDiskUsageFormatted: formatFileSize(videosSize),
+      imagesDiskUsageBytes: imagesSize,
+      imagesDiskUsageFormatted: formatFileSize(imagesSize),
     };
 
     logger.debug(`Storage stats: ${stats.totalGifs} GIFs, ${stats.totalVideos} videos, ${stats.totalImages} images, ${stats.diskUsageFormatted}`);
@@ -363,6 +378,12 @@ export async function getStorageStats(storagePath) {
       totalImages: 0,
       diskUsageBytes: 0,
       diskUsageFormatted: '0.00 MB',
+      gifsDiskUsageBytes: 0,
+      gifsDiskUsageFormatted: '0.00 MB',
+      videosDiskUsageBytes: 0,
+      videosDiskUsageFormatted: '0.00 MB',
+      imagesDiskUsageBytes: 0,
+      imagesDiskUsageFormatted: '0.00 MB',
     };
   }
 }

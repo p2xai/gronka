@@ -1,5 +1,6 @@
 ---
 layout: default
+description: a discord bot that turns your videos and images into gifs. simple file conversion with support for multiple video and image formats.
 image: https://cdn.discordapp.com/attachments/1335451213285822485/1440055450132414736/content.png?ex=691cc3a6&is=691b7226&hm=864a8c2f8d7ee5aaa7dac42318d3364032d9d29099057b1c7a3e0fb41a4063dd&
 ---
 

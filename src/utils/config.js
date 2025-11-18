@@ -137,7 +137,7 @@ function getBotConfig() {
     ),
     clientId: requireStringEnv('CLIENT_ID', 'Discord application/client ID'),
     adminUserIds: parseIdList('ADMIN_USER_IDS'),
-    gifStoragePath: getStringEnv('GIF_STORAGE_PATH', './data/gifs'),
+    gifStoragePath: getStringEnv('GIF_STORAGE_PATH', './data'),
     cdnBaseUrl: getStringEnv('CDN_BASE_URL', 'http://localhost:3000/gifs'),
     maxGifWidth: parseIntEnv('MAX_GIF_WIDTH', 720, 1, 4096),
     maxGifDuration: parseIntEnv('MAX_GIF_DURATION', 30, 1, 300),
@@ -178,7 +178,7 @@ export const botConfig = new Proxy(
 
 // Server configuration
 export const serverConfig = {
-  gifStoragePath: getStringEnv('GIF_STORAGE_PATH', './data/gifs'),
+  gifStoragePath: getStringEnv('GIF_STORAGE_PATH', './data'),
   serverPort: parseIntEnv('SERVER_PORT', 3000, 1, 65535),
   serverHost: getStringEnv('SERVER_HOST', '0.0.0.0'),
   statsUsername: getStringEnv('STATS_USERNAME', null),

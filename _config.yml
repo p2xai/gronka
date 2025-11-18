@@ -2,6 +2,10 @@ title: gronka
 description: gronka - a discord bot that turns your videos and images into gifs
 url: ""
 baseurl: ""
+lang: en
+author: p2xai
+twitter:
+  username: ""
 
 # discord embed image
 image: https://cdn.discordapp.com/attachments/1335451213285822485/1440055450132414736/content.png?ex=691cc3a6&is=691b7226&hm=864a8c2f8d7ee5aaa7dac42318d3364032d9d29099057b1c7a3e0fb41a4063dd&
@@ -12,6 +16,7 @@ theme: minima
 plugins:
   - jekyll-feed
   - jekyll-seo-tag
+  - jekyll-sitemap
 
 # exclude
 exclude:
