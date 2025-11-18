@@ -63,10 +63,26 @@ export async function checkLocalGif(hash, storagePath) {
  * Optimize a GIF file using giflossy docker container
  * @param {string} inputPath - Path to input GIF file
  * @param {string} outputPath - Path to output optimized GIF file
+ * @param {Object} options - Optimization options
+ * @param {number} options.lossy - Lossy compression level (0-100, default: 35). Higher = more compression, lower quality
+ * @param {number} options.optimize - Optimization level (1-3, default: 3). Higher = better optimization, slower
  * @returns {Promise<void>}
  */
-export async function optimizeGif(inputPath, outputPath) {
-  logger.info(`Optimizing GIF: ${inputPath} -> ${outputPath}`);
+export async function optimizeGif(inputPath, outputPath, options = {}) {
+  const lossy = options.lossy ?? 35;
+  const optimizeLevel = options.optimize ?? 3;
+  
+  // Validate lossy level (0-100)
+  if (typeof lossy !== 'number' || lossy < 0 || lossy > 100) {
+    throw new ValidationError('lossy level must be between 0 and 100');
+  }
+  
+  // Validate optimize level (1-3)
+  if (typeof optimizeLevel !== 'number' || optimizeLevel < 1 || optimizeLevel > 3) {
+    throw new ValidationError('optimize level must be between 1 and 3');
+  }
+  
+  logger.info(`Optimizing GIF: ${inputPath} -> ${outputPath} (lossy: ${lossy}, optimize: ${optimizeLevel})`);
   
   // Validate input file exists
   try {
@@ -102,8 +118,8 @@ export async function optimizeGif(inputPath, outputPath) {
   const containerName = 'gronka';
   
   // Use docker run with --volumes-from to inherit volumes
-  // gifsicle command: gifsicle --optimize=3 --lossy=80 input.gif -o output.gif
-  const command = `docker run --rm --volumes-from ${containerName} dylanninin/giflossy:latest /bin/gifsicle --optimize=3 --lossy=80 "${inputDockerPath}" -o "${outputDockerPath}"`;
+  // gifsicle command: gifsicle --optimize=3 --lossy=35 input.gif -o output.gif (default lossy: 35)
+  const command = `docker run --rm --volumes-from ${containerName} dylanninin/giflossy:latest /bin/gifsicle --optimize=${optimizeLevel} --lossy=${lossy} "${inputDockerPath}" -o "${outputDockerPath}"`;
   
   try {
     logger.debug(`Executing: ${command}`);

@@ -55,13 +55,25 @@ you need these two things in your `.env`:
 
 everything else is optional. check `.env.example` for what you can tweak (output quality, file size limits, that kind of stuff).
 
+### optimization settings
+
+when using `/optimize`, you can specify a lossy compression level:
+- range: 0-100 (default: 35)
+- lower values (0-30): less compression, higher quality, larger files
+- medium values (30-60): balanced compression and quality
+- higher values (60-100): more compression, lower quality, smaller files
+
+for context menu optimization, a modal will appear to let you enter the lossy level.
+
 ## using gronka
 
 ### commands
 
 - `/convert` - attach a file or paste a url to convert it
+- `/optimize` - optimize an existing gif to reduce file size (supports custom lossy level 0-100)
 - `/stats` - see how many gifs gronka has made
 - right-click a message → apps → "convert to gif" - quick convert from any message
+- right-click a message → apps → "optimize" - optimize a gif from any message
 
 ### the cdn
 

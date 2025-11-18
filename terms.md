@@ -47,6 +47,20 @@ You must not use gronka to:
   - Violates privacy rights
   - Includes sensitive data (passwords, credit cards, etc.)
 
+## Fair Use Policy
+
+You are free to upload and process files through this service for legitimate use. There are no hard limits on upload volume for normal use.
+
+Operating this service incurs ongoing costs. Please use it responsibly and avoid unnecessary or excessive usage.
+
+Spamming, intentionally uploading excessive files or data, or any activity that degrades service performance or availability is prohibited. We reserve the right to determine what constitutes abuse or excessive use.
+
+The service is intended solely for legitimate video-to-GIF conversion purposes. Any use of the service for data storage, archival, or other non-intended purposes is strictly prohibited. This includes repurposing processed media files or the service infrastructure for storage of information or data in any form.
+
+We may suspend or permanently ban any user at any time, without notice or explanation, for violations of this policy or for any other reason we deem necessary. Banned users have no right to appeal or request reinstatement.
+
+This service is provided at our discretion. Continued access is not guaranteed, and we are not obligated to provide service to any user.
+
 ## User Responsibilities
 
 ### Content Ownership

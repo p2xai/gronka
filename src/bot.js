@@ -1009,6 +1009,51 @@ async function handleModalSubmit(interaction) {
   }
 
   const customId = interaction.customId;
+  
+  // Handle optimize modal
+  if (customId.startsWith('optimize_modal_')) {
+    const userId = interaction.user.id;
+    
+    // Retrieve cached attachment info
+    const cachedData = modalAttachmentCache.get(customId);
+    if (!cachedData) {
+      logger.warn(`No cached data found for optimize modal ${customId} from user ${userId}`);
+      await interaction.reply({
+        content: 'modal session expired. please try again.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    
+    // Clean up cache entry
+    modalAttachmentCache.delete(customId);
+    
+    const { attachment, adminUser, preDownloadedBuffer } = cachedData;
+    
+    // Parse lossy level
+    const lossyValue = interaction.fields.getTextInputValue('lossy_level') || null;
+    let lossyLevel = null;
+    
+    if (lossyValue && lossyValue.trim() !== '') {
+      const parsed = parseInt(lossyValue.trim(), 10);
+      if (isNaN(parsed) || parsed < 0 || parsed > 100) {
+        await interaction.reply({
+          content: 'invalid lossy level. must be a number between 0 and 100.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      lossyLevel = parsed;
+    }
+    
+    // Defer reply since optimization may take time
+    await interaction.deferReply();
+    
+    // Process optimization
+    await processOptimization(interaction, attachment, adminUser, preDownloadedBuffer, lossyLevel);
+    return;
+  }
+  
   if (!customId.startsWith('gif_advanced_')) {
     return;
   }
@@ -1476,6 +1521,11 @@ async function handleStatsCommand(interaction) {
     const guildCount = client.guilds.cache.size;
     const userCount = await getUniqueUserCount();
 
+    // Get user's configured FPS
+    const userId = interaction.user.id;
+    const userConfig = await getUserConfig(userId);
+    const currentFps = userConfig.fps !== null ? userConfig.fps : DEFAULT_FPS;
+
     const embed = new EmbedBuilder()
       .setTitle('bot statistics')
       .setColor(0x5865f2)
@@ -1492,7 +1542,7 @@ async function handleStatsCommand(interaction) {
         },
         {
           name: 'configuration',
-          value: `max width: \`${MAX_GIF_WIDTH}px\`\nmax duration: \`${MAX_GIF_DURATION}s\`\ndefault fps: \`${DEFAULT_FPS}\``,
+          value: `max width: \`${MAX_GIF_WIDTH}px\`\nmax duration: \`${MAX_GIF_DURATION}s\`\nfps: \`${currentFps}\``,
           inline: false,
         }
       );
@@ -2087,13 +2137,33 @@ async function handleOptimizeContextMenuCommand(interaction) {
     return;
   }
 
-  // Defer reply if not already deferred (for attachment case)
-  if (!url) {
-    await interaction.deferReply();
-  }
+  // Show modal to get lossy level
+  const modal = new ModalBuilder()
+    .setCustomId(`optimize_modal_${Date.now()}`)
+    .setTitle('optimize gif');
 
-  // Process optimization
-  await processOptimization(interaction, attachment, adminUser, preDownloadedBuffer);
+  const lossyInput = new TextInputBuilder()
+    .setCustomId('lossy_level')
+    .setLabel('lossy level (0-100, default: 35)')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('35')
+    .setRequired(false)
+    .setMaxLength(3);
+
+  const actionRow = new ActionRowBuilder().addComponents(lossyInput);
+  modal.addComponents(actionRow);
+
+  // Store attachment info for modal submission
+  const modalId = modal.data.custom_id;
+  modalAttachmentCache.set(modalId, {
+    attachment,
+    attachmentType: 'gif',
+    adminUser,
+    preDownloadedBuffer,
+    timestamp: Date.now(),
+  });
+
+  await interaction.showModal(modal);
 }
 
 /**
@@ -2121,6 +2191,16 @@ async function handleOptimizeCommand(interaction) {
   // Get attachment or URL from command options
   const attachment = interaction.options.getAttachment('file');
   const url = interaction.options.getString('url');
+  const lossyLevel = interaction.options.getNumber('lossy');
+
+  // Validate lossy level if provided
+  if (lossyLevel !== null && (lossyLevel < 0 || lossyLevel > 100)) {
+    await interaction.reply({
+      content: 'lossy level must be between 0 and 100.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
 
   if (!attachment && !url) {
     logger.warn(`No attachment or URL provided for user ${userId}`);
@@ -2233,7 +2313,7 @@ async function handleOptimizeCommand(interaction) {
     await interaction.deferReply();
   }
 
-  await processOptimization(interaction, finalAttachment, adminUser, preDownloadedBuffer);
+  await processOptimization(interaction, finalAttachment, adminUser, preDownloadedBuffer, lossyLevel);
 }
 
 /**
@@ -2242,8 +2322,9 @@ async function handleOptimizeCommand(interaction) {
  * @param {Attachment} attachment - Discord attachment (GIF file)
  * @param {boolean} adminUser - Whether the user is an admin
  * @param {Buffer} [preDownloadedBuffer] - Optional pre-downloaded buffer
+ * @param {number} [lossyLevel] - Lossy compression level (0-100, default: 35)
  */
-async function processOptimization(interaction, attachment, adminUser, preDownloadedBuffer = null) {
+async function processOptimization(interaction, attachment, adminUser, preDownloadedBuffer = null, lossyLevel = null) {
   const userId = interaction.user.id;
   const tempFiles = [];
 
@@ -2267,13 +2348,20 @@ async function processOptimization(interaction, attachment, adminUser, preDownlo
     await fs.writeFile(tempInputPath, fileBuffer);
     tempFiles.push(tempInputPath);
 
-    // Generate hash for optimized file (using original hash + 'opt' suffix for uniqueness)
-    const optimizedHash = crypto.createHash('md5').update(fileBuffer).update('optimized').digest('hex');
+    // Generate hash for optimized file (include lossy level in hash for uniqueness)
+    const hash = crypto.createHash('md5');
+    hash.update(fileBuffer);
+    hash.update('optimized');
+    if (lossyLevel !== null) {
+      hash.update(lossyLevel.toString());
+    }
+    const optimizedHash = hash.digest('hex');
     const optimizedGifPath = getGifPath(optimizedHash, GIF_STORAGE_PATH);
 
-    // Optimize the GIF
-    logger.info(`Optimizing GIF: ${tempInputPath} -> ${optimizedGifPath}`);
-    await optimizeGif(tempInputPath, optimizedGifPath);
+    // Optimize the GIF with specified lossy level
+    const optimizeOptions = lossyLevel !== null ? { lossy: lossyLevel } : {};
+    logger.info(`Optimizing GIF: ${tempInputPath} -> ${optimizedGifPath}${lossyLevel !== null ? ` (lossy: ${lossyLevel})` : ''}`);
+    await optimizeGif(tempInputPath, optimizedGifPath, optimizeOptions);
 
     // Read optimized file and get its size
     const optimizedBuffer = await fs.readFile(optimizedGifPath);
@@ -2533,6 +2621,7 @@ let botStartTime = null;
 client.once(Events.ClientReady, async readyClient => {
   botStartTime = Date.now();
   await initializeUserTracking();
+  readyClient.user.setPresence({ status: 'dnd' });
   logger.info(`bot logged in as ${readyClient.user.tag}`);
   logger.info(`gif storage: ${GIF_STORAGE_PATH}`);
   logger.info(`cdn url: ${CDN_BASE_URL}`);

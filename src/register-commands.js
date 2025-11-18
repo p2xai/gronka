@@ -91,6 +91,14 @@ const commands = [
         type: 3, // STRING type
         required: false,
       },
+      {
+        name: 'lossy',
+        description: 'lossy compression level (0-100, default: 35). higher = more compression, lower quality',
+        type: 10, // NUMBER type
+        required: false,
+        min_value: 0,
+        max_value: 100,
+      },
     ],
     default_member_permissions: null, // Available to everyone
     dm_permission: true, // Enable in DMs
