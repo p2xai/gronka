@@ -32,6 +32,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 
@@ -44,4 +45,7 @@ _site/
 .jekyll-cache/
 .jekyll-metadata
 vendor/
+.bundle/
+_layouts/
+Gemfile.lock
 
