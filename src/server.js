@@ -188,7 +188,7 @@ const publicPath = path.resolve(process.cwd(), 'src', 'public');
 app.get('/', (req, res) => {
   logger.debug('Root endpoint requested');
   res.json({
-    service: 'discord gif cdn',
+    service: 'gronka cdn',
     endpoints: {
       health: '/health',
       stats: '/stats',

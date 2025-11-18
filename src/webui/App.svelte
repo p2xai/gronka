@@ -5,7 +5,7 @@
 
 <main>
   <header>
-    <h1>Discord GIF Bot</h1>
+    <h1>gronka</h1>
   </header>
   <div class="content">
     <Stats />

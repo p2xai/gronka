@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: discord-gif-bot
+    container_name: gronka
     restart: unless-stopped
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
@@ -24,7 +24,7 @@ services:
     ports:
       - '3000:3000'
     networks:
-      - gif-bot-network
+      - gronka-network
     healthcheck:
       test:
         [
@@ -42,7 +42,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: discord-gif-bot-webui
+    container_name: gronka-webui
     restart: unless-stopped
     environment:
       - WEBUI_PORT=3001
@@ -54,7 +54,7 @@ services:
       # Accessible from all interfaces on host machine (server-ip:3001), not exposed via cloudflared
       - '3001:3001'
     networks:
-      - gif-bot-network
+      - gronka-network
     depends_on:
       app:
         condition: service_healthy
@@ -75,7 +75,7 @@ services:
       - ./config/cloudflared-config.yml:/etc/cloudflared/config.yml:ro
       - ./config/credentials.json:/etc/cloudflared/credentials.json:ro
     networks:
-      - gif-bot-network
+      - gronka-network
     depends_on:
       app:
         condition: service_healthy
@@ -90,5 +90,5 @@ volumes:
   cloudflared-credentials:
 
 networks:
-  gif-bot-network:
+  gronka-network:
     driver: bridge
