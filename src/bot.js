@@ -1,14 +1,25 @@
-import { Client, GatewayIntentBits, Events, MessageFlags, EmbedBuilder } from 'discord.js';
+import {
+  Client,
+  GatewayIntentBits,
+  Events,
+  MessageFlags,
+  EmbedBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder,
+} from 'discord.js';
 import axios from 'axios';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { convertToGif, getVideoMetadata, convertImageToGif } from './utils/video-processor.js';
-import { gifExists, getGifPath, cleanupTempFiles, getStorageStats } from './utils/storage.js';
+import { gifExists, getGifPath, cleanupTempFiles, getStorageStats, saveGif, saveVideo, getVideoPath, videoExists, saveImage, getImagePath, imageExists, detectFileType } from './utils/storage.js';
 import { createLogger } from './utils/logger.js';
 import { botConfig } from './utils/config.js';
 import { validateUrl, sanitizeFilename, validateFileExtension } from './utils/validation.js';
 import { ConfigurationError, NetworkError, ValidationError } from './utils/errors.js';
+import { isSocialMediaUrl, downloadFromSocialMedia } from './utils/cobalt.js';
 
 // Initialize logger
 const logger = createLogger('bot');
@@ -26,10 +37,25 @@ const {
   maxVideoSize: MAX_VIDEO_SIZE,
   maxImageSize: MAX_IMAGE_SIZE,
   rateLimitCooldown: RATE_LIMIT_COOLDOWN,
+  cobaltApiUrl: COBALT_API_URL,
+  cobaltEnabled: COBALT_ENABLED,
 } = botConfig;
 
 // Rate limiting: userId -> last use timestamp
 const rateLimit = new Map();
+
+// Store attachment info for modal submissions: customId -> { attachment, attachmentType, adminUser, preDownloadedBuffer }
+const modalAttachmentCache = new Map();
+
+// Clean up modal cache entries older than 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of modalAttachmentCache.entries()) {
+    if (value.timestamp && now - value.timestamp > 5 * 60 * 1000) {
+      modalAttachmentCache.delete(key);
+    }
+  }
+}, 60 * 1000); // Run cleanup every minute
 
 // Allowed video content types
 const ALLOWED_VIDEO_TYPES = [
@@ -250,6 +276,19 @@ async function downloadFileFromUrl(url, isAdminUser = false, client = null) {
       }
     } catch (error) {
       logger.warn(`Failed to refresh Discord URL, using original: ${error.message}`);
+    }
+  }
+
+  // Check if URL is from social media and Cobalt is enabled
+  // Skip Cobalt for Discord CDN URLs as they are handled directly
+  if (COBALT_ENABLED && !isDiscordCdnUrl(actualUrl) && isSocialMediaUrl(actualUrl)) {
+    try {
+      logger.info(`Detected social media URL, attempting download via Cobalt`);
+      const maxSize = isAdminUser ? Infinity : MAX_VIDEO_SIZE;
+      return await downloadFromSocialMedia(COBALT_API_URL, actualUrl, isAdminUser, maxSize);
+    } catch (cobaltError) {
+      logger.warn(`Cobalt download failed, falling back to direct download: ${cobaltError.message}`);
+      // Fall through to direct download
     }
   }
 
@@ -553,13 +592,15 @@ function validateImageAttachment(attachment, isAdminUser = false) {
  * @param {string} attachmentType - Type of attachment ('video' or 'image')
  * @param {boolean} adminUser - Whether the user is an admin
  * @param {Buffer} [preDownloadedBuffer] - Optional pre-downloaded buffer (to avoid double download)
+ * @param {Object} [options] - Optional conversion options (startTime, duration, width, fps, quality)
  */
 async function processConversion(
   interaction,
   attachment,
   attachmentType,
   adminUser,
-  preDownloadedBuffer = null
+  preDownloadedBuffer = null,
+  options = {}
 ) {
   const userId = interaction.user.id;
   const tempFiles = [];
@@ -647,11 +688,35 @@ async function processConversion(
     const gifPath = getGifPath(hash, GIF_STORAGE_PATH);
 
     if (attachmentType === 'video') {
-      await convertToGif(tempFilePath, gifPath, {
-        width: Math.min(MAX_GIF_WIDTH, 480),
-        fps: DEFAULT_FPS,
-        quality: 'medium',
-      });
+      // Build conversion options, using provided options or defaults
+      const conversionOptions = {
+        width: options.width ?? Math.min(MAX_GIF_WIDTH, 480),
+        fps: options.fps ?? DEFAULT_FPS,
+        quality: options.quality ?? 'medium',
+        startTime: options.startTime ?? null,
+        duration: options.duration ?? null,
+      };
+
+      // Validate duration against video length if startTime and duration are provided
+      if (conversionOptions.startTime !== null && conversionOptions.duration !== null) {
+        try {
+          const metadata = await getVideoMetadata(tempFilePath);
+          const videoDuration = metadata.format.duration;
+          const requestedEnd = conversionOptions.startTime + conversionOptions.duration;
+
+          if (requestedEnd > videoDuration) {
+            await interaction.editReply({
+              content: `requested timeframe (${conversionOptions.startTime}s to ${requestedEnd.toFixed(1)}s) exceeds video length (${videoDuration.toFixed(1)}s).`,
+            });
+            return;
+          }
+        } catch (error) {
+          logger.warn('Failed to get video metadata for timeframe validation:', error.message);
+          // Continue anyway, FFmpeg will handle it
+        }
+      }
+
+      await convertToGif(tempFilePath, gifPath, conversionOptions);
     } else {
       // Check if input is already a GIF
       const isGif = attachment.contentType === 'image/gif' || ext === '.gif';
@@ -663,35 +728,38 @@ async function processConversion(
           const videoStream = metadata.streams?.find(s => s.codec_type === 'video');
           const gifWidth = videoStream?.width;
           
-          if (gifWidth && gifWidth <= MAX_GIF_WIDTH) {
+          // Use provided width or check against limits
+          const targetWidth = options.width ?? Math.min(MAX_GIF_WIDTH, 720);
+          
+          if (gifWidth && gifWidth <= MAX_GIF_WIDTH && !options.width) {
             // GIF is within size limits, copy directly without re-encoding
             logger.info(
               `Input GIF is within size limits (${gifWidth}px <= ${MAX_GIF_WIDTH}px), copying directly`
             );
             await fs.copyFile(tempFilePath, gifPath);
           } else {
-            // GIF exceeds size limits, resize with convertImageToGif
+            // GIF exceeds size limits or custom width requested, resize with convertImageToGif
             logger.info(
-              `Input GIF exceeds size limits (${gifWidth || 'unknown'}px > ${MAX_GIF_WIDTH}px), resizing`
+              `Input GIF exceeds size limits or custom width requested (${gifWidth || 'unknown'}px), resizing to ${targetWidth}px`
             );
             await convertImageToGif(tempFilePath, gifPath, {
-              width: Math.min(MAX_GIF_WIDTH, 720),
-              quality: 'medium',
+              width: targetWidth,
+              quality: options.quality ?? 'medium',
             });
           }
         } catch (error) {
           // If metadata extraction fails, fall back to normal conversion
           logger.warn(`Failed to get GIF metadata, falling back to conversion: ${error.message}`);
           await convertImageToGif(tempFilePath, gifPath, {
-            width: Math.min(MAX_GIF_WIDTH, 720),
-            quality: 'medium',
+            width: options.width ?? Math.min(MAX_GIF_WIDTH, 720),
+            quality: options.quality ?? 'medium',
           });
         }
       } else {
         // Not a GIF, proceed with normal conversion
         await convertImageToGif(tempFilePath, gifPath, {
-          width: Math.min(MAX_GIF_WIDTH, 720),
-          quality: 'medium',
+          width: options.width ?? Math.min(MAX_GIF_WIDTH, 720),
+          quality: options.quality ?? 'medium',
         });
       }
     }
@@ -721,6 +789,449 @@ async function processConversion(
       await cleanupTempFiles(tempFiles);
     }
   }
+}
+
+/**
+ * Handle advanced context menu command with modal
+ * @param {Interaction} interaction - Discord interaction
+ */
+async function handleAdvancedContextMenuCommand(interaction) {
+  if (!interaction.isMessageContextMenuCommand()) {
+    return;
+  }
+
+  if (interaction.commandName !== 'convert to gif (advanced)') {
+    return;
+  }
+
+  const userId = interaction.user.id;
+  const adminUser = isAdmin(userId);
+
+  logger.info(
+    `User ${userId} (${interaction.user.tag}) initiated advanced conversion${adminUser ? ' [ADMIN]' : ''}`
+  );
+
+  // Check rate limit (admins bypass this check)
+  if (checkRateLimit(userId)) {
+    logger.warn(`User ${userId} (${interaction.user.tag}) is rate limited`);
+    await interaction.reply({
+      content: 'please wait 30 seconds before converting another video or image.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Get the message that was right-clicked
+  const targetMessage = interaction.targetMessage;
+
+  // Find video or image attachment
+  const videoAttachment = targetMessage.attachments.find(
+    att => att.contentType && ALLOWED_VIDEO_TYPES.includes(att.contentType)
+  );
+
+  const imageAttachment = targetMessage.attachments.find(
+    att => att.contentType && ALLOWED_IMAGE_TYPES.includes(att.contentType)
+  );
+
+  // Check for URLs in message content if no attachments found
+  let url = null;
+  if (!videoAttachment && !imageAttachment && targetMessage.content) {
+    // Extract URLs from message content
+    const urlPattern = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi;
+    const urls = targetMessage.content.match(urlPattern);
+    if (urls && urls.length > 0) {
+      url = urls[0]; // Use the first URL found
+      logger.info(`Found URL in message content: ${url}`);
+    }
+  }
+
+  // Determine attachment type and validate
+  let attachment = null;
+  let attachmentType = null;
+  let preDownloadedBuffer = null;
+
+  if (videoAttachment) {
+    attachment = videoAttachment;
+    attachmentType = 'video';
+    logger.info(
+      `Processing video: ${videoAttachment.name} (${(videoAttachment.size / (1024 * 1024)).toFixed(2)}MB)`
+    );
+    const validation = validateVideoAttachment(videoAttachment, adminUser);
+    if (!validation.valid) {
+      logger.warn(`Video validation failed for user ${userId}: ${validation.error}`);
+      await interaction.reply({
+        content: validation.error,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+  } else if (imageAttachment) {
+    attachment = imageAttachment;
+    attachmentType = 'image';
+    logger.info(
+      `Processing image: ${imageAttachment.name} (${(imageAttachment.size / (1024 * 1024)).toFixed(2)}MB)`
+    );
+    const validation = validateImageAttachment(imageAttachment, adminUser);
+    if (!validation.valid) {
+      logger.warn(`Image validation failed for user ${userId}: ${validation.error}`);
+      await interaction.reply({
+        content: validation.error,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+  } else if (url) {
+    // Validate URL format and protocol (strict validation)
+    const urlValidation = validateUrl(url);
+    if (!urlValidation.valid) {
+      logger.warn(`Invalid URL for user ${userId}: ${urlValidation.error}`);
+      await interaction.reply({
+        content: `invalid URL: ${urlValidation.error}`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // For URLs, we'll need to download first to determine type, but we'll do that in modal submit
+    // For now, just store the URL
+    attachment = {
+      url: url,
+      name: 'file',
+      size: 0,
+      contentType: null,
+    };
+    attachmentType = 'unknown';
+  } else {
+    logger.warn(`No video or image attachment or URL found for user ${userId}`);
+    await interaction.reply({
+      content: 'no video or image attachment or URL found in this message.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Create modal
+  const customId = `gif_advanced_${Date.now()}_${userId}`;
+  const modal = new ModalBuilder().setCustomId(customId).setTitle('GIF Conversion Options');
+
+  // Start time input (for videos)
+  const startTimeInput = new TextInputBuilder()
+    .setCustomId('start_time')
+    .setLabel('Start Time (seconds)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setPlaceholder('0')
+    .setMaxLength(10);
+
+  // Duration input
+  const durationInput = new TextInputBuilder()
+    .setCustomId('duration')
+    .setLabel('Duration (seconds)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setPlaceholder('max')
+    .setMaxLength(10);
+
+  // Quality input
+  const qualityInput = new TextInputBuilder()
+    .setCustomId('quality')
+    .setLabel('Quality (low/medium/high)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setPlaceholder('medium')
+    .setMaxLength(10);
+
+  // Width input
+  const widthInput = new TextInputBuilder()
+    .setCustomId('width')
+    .setLabel('Width (pixels)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setPlaceholder(attachmentType === 'video' ? '480' : '720')
+    .setMaxLength(10);
+
+  // FPS input (for videos)
+  const fpsInput = new TextInputBuilder()
+    .setCustomId('fps')
+    .setLabel('FPS (frames per second)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setPlaceholder('15')
+    .setMaxLength(10);
+
+  // Add inputs to modal (only show FPS for videos)
+  const firstRow = new ActionRowBuilder().addComponents(startTimeInput);
+  const secondRow = new ActionRowBuilder().addComponents(durationInput);
+  const thirdRow = new ActionRowBuilder().addComponents(qualityInput);
+  const fourthRow = new ActionRowBuilder().addComponents(widthInput);
+
+  modal.addComponents(firstRow, secondRow, thirdRow, fourthRow);
+
+  if (attachmentType === 'video' || attachmentType === 'unknown') {
+    const fifthRow = new ActionRowBuilder().addComponents(fpsInput);
+    modal.addComponents(fifthRow);
+  }
+
+  // Store attachment info in cache
+  modalAttachmentCache.set(customId, {
+    attachment,
+    attachmentType,
+    adminUser,
+    preDownloadedBuffer,
+    url,
+    timestamp: Date.now(),
+  });
+
+  // Show modal
+  await interaction.showModal(modal);
+}
+
+/**
+ * Handle modal submission for advanced GIF conversion
+ * @param {Interaction} interaction - Discord modal submit interaction
+ */
+async function handleModalSubmit(interaction) {
+  if (!interaction.isModalSubmit()) {
+    return;
+  }
+
+  const customId = interaction.customId;
+  if (!customId.startsWith('gif_advanced_')) {
+    return;
+  }
+
+  const userId = interaction.user.id;
+
+  // Retrieve cached attachment info
+  const cachedData = modalAttachmentCache.get(customId);
+  if (!cachedData) {
+    logger.warn(`No cached data found for modal ${customId} from user ${userId}`);
+    await interaction.reply({
+      content: 'modal session expired. please try again.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Clean up cache entry
+  modalAttachmentCache.delete(customId);
+
+  const { attachment, attachmentType: cachedAttachmentType, adminUser, url } = cachedData;
+
+  // Parse and validate modal fields
+  const startTimeValue = interaction.fields.getTextInputValue('start_time') || null;
+  const durationValue = interaction.fields.getTextInputValue('duration') || null;
+  const qualityValue = interaction.fields.getTextInputValue('quality') || null;
+  const widthValue = interaction.fields.getTextInputValue('width') || null;
+  const fpsValue = interaction.fields.getTextInputValue('fps') || null;
+
+  // Parse and validate options
+  const options = {};
+
+  // Start time
+  if (startTimeValue && startTimeValue.trim() !== '') {
+    const startTime = parseFloat(startTimeValue.trim());
+    if (isNaN(startTime) || startTime < 0) {
+      await interaction.reply({
+        content: 'invalid start time. must be a number >= 0.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    options.startTime = startTime;
+  }
+
+  // Duration
+  if (durationValue && durationValue.trim() !== '' && durationValue.trim().toLowerCase() !== 'max') {
+    const duration = parseFloat(durationValue.trim());
+    if (isNaN(duration) || duration <= 0) {
+      await interaction.reply({
+        content: 'invalid duration. must be a number > 0.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (!adminUser && duration > MAX_GIF_DURATION) {
+      await interaction.reply({
+        content: `duration exceeds maximum (${MAX_GIF_DURATION}s).`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    options.duration = duration;
+  }
+
+  // Quality
+  if (qualityValue && qualityValue.trim() !== '') {
+    const quality = qualityValue.trim().toLowerCase();
+    if (!['low', 'medium', 'high'].includes(quality)) {
+      await interaction.reply({
+        content: 'invalid quality. must be one of: low, medium, high.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    options.quality = quality;
+  }
+
+  // Width
+  if (widthValue && widthValue.trim() !== '') {
+    const width = parseInt(widthValue.trim(), 10);
+    if (isNaN(width) || width < 1 || width > 4096) {
+      await interaction.reply({
+        content: 'invalid width. must be a number between 1 and 4096.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (width > MAX_GIF_WIDTH) {
+      await interaction.reply({
+        content: `width exceeds maximum (${MAX_GIF_WIDTH}px).`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    options.width = width;
+  }
+
+  // FPS
+  if (fpsValue && fpsValue.trim() !== '') {
+    const fps = parseFloat(fpsValue.trim());
+    if (isNaN(fps) || fps < 0.1 || fps > 120) {
+      await interaction.reply({
+        content: 'invalid fps. must be a number between 0.1 and 120.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    options.fps = fps;
+  }
+
+  // Defer reply since conversion may take time
+  await interaction.deferReply();
+
+  // Handle URL downloads if needed
+  let finalAttachment = attachment;
+  let attachmentType = cachedAttachmentType;
+  let preDownloadedBuffer = cachedData.preDownloadedBuffer;
+
+  if (url && cachedAttachmentType === 'unknown') {
+    try {
+      // Check if URL is a Tenor GIF link and parse it
+      let actualUrl = url;
+      const isTenorUrl = /^https?:\/\/(www\.)?tenor\.com\/view\/.+-gif-\d+/i.test(url);
+      if (isTenorUrl) {
+        logger.info(`Detected Tenor URL, parsing to extract GIF URL: ${url}`);
+        try {
+          actualUrl = await parseTenorUrl(url);
+          logger.info(`Resolved Tenor URL to: ${actualUrl}`);
+        } catch (error) {
+          logger.error(`Failed to parse Tenor URL for user ${userId}:`, error);
+          await interaction.editReply({
+            content: error.message || 'failed to parse Tenor URL.',
+          });
+          return;
+        }
+      }
+
+      logger.info(`Downloading file from URL: ${actualUrl}`);
+      const fileData = await downloadFileFromUrl(actualUrl, adminUser, interaction.client);
+
+      // Store the buffer to avoid double download
+      preDownloadedBuffer = fileData.buffer;
+
+      // Create a pseudo-attachment object
+      finalAttachment = {
+        url: actualUrl,
+        name: fileData.filename,
+        size: fileData.size,
+        contentType: fileData.contentType,
+      };
+
+      // Determine attachment type based on content type
+      logger.info(`File data from URL: filename=${fileData.filename}, contentType=${fileData.contentType}, size=${fileData.size}`);
+      
+      if (fileData.contentType && ALLOWED_VIDEO_TYPES.includes(fileData.contentType)) {
+        attachmentType = 'video';
+        logger.info(
+          `Processing video from URL: ${finalAttachment.name} (${(finalAttachment.size / (1024 * 1024)).toFixed(2)}MB)`
+        );
+        const validation = validateVideoAttachment(finalAttachment, adminUser);
+        if (!validation.valid) {
+          logger.warn(`Video validation failed for user ${userId}: ${validation.error}`);
+          await interaction.editReply({
+            content: validation.error,
+          });
+          return;
+        }
+      } else if (fileData.contentType && ALLOWED_IMAGE_TYPES.includes(fileData.contentType)) {
+        attachmentType = 'image';
+        logger.info(
+          `Processing image from URL: ${finalAttachment.name} (${(finalAttachment.size / (1024 * 1024)).toFixed(2)}MB)`
+        );
+        const validation = validateImageAttachment(finalAttachment, adminUser);
+        if (!validation.valid) {
+          logger.warn(`Image validation failed for user ${userId}: ${validation.error}`);
+          await interaction.editReply({
+            content: validation.error,
+          });
+          return;
+        }
+      } else {
+        // Try to infer from filename extension as fallback
+        const ext = path.extname(fileData.filename).toLowerCase();
+        const videoExts = ['.mp4', '.mov', '.webm', '.avi', '.mkv'];
+        const imageExts = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
+        
+        if (videoExts.includes(ext)) {
+          logger.info(`Inferred video type from extension ${ext}, proceeding with conversion`);
+          attachmentType = 'video';
+          const validation = validateVideoAttachment(finalAttachment, adminUser);
+          if (!validation.valid) {
+            logger.warn(`Video validation failed for user ${userId}: ${validation.error}`);
+            await interaction.editReply({
+              content: validation.error,
+            });
+            return;
+          }
+        } else if (imageExts.includes(ext)) {
+          logger.info(`Inferred image type from extension ${ext}, proceeding with conversion`);
+          attachmentType = 'image';
+          const validation = validateImageAttachment(finalAttachment, adminUser);
+          if (!validation.valid) {
+            logger.warn(`Image validation failed for user ${userId}: ${validation.error}`);
+            await interaction.editReply({
+              content: validation.error,
+            });
+            return;
+          }
+        } else {
+          logger.warn(`Invalid attachment type for user ${userId}: contentType=${fileData.contentType}, filename=${fileData.filename}, ext=${ext}`);
+          await interaction.editReply({
+            content:
+              `unsupported file format. received content-type: ${fileData.contentType || 'unknown'}, filename: ${fileData.filename}. please provide a video (mp4, mov, webm, avi, mkv) or image (png, jpg, jpeg, webp, gif).`,
+          });
+          return;
+        }
+      }
+    } catch (error) {
+      logger.error(`Failed to download file from URL for user ${userId}:`, error);
+      await interaction.editReply({
+        content: error.message || 'failed to download file from URL.',
+      });
+      return;
+    }
+  }
+
+  // Process conversion with options
+  await processConversion(
+    interaction,
+    finalAttachment,
+    attachmentType,
+    adminUser,
+    preDownloadedBuffer,
+    options
+  );
 }
 
 /**
@@ -962,8 +1473,8 @@ async function handleStatsCommand(interaction) {
           inline: false,
         },
         {
-          name: 'gif storage',
-          value: `total gifs: \`${storageStats.totalGifs.toLocaleString()}\`\ndisk usage: \`${storageStats.diskUsageFormatted}\``,
+          name: 'file storage',
+          value: `total gifs: \`${storageStats.totalGifs.toLocaleString()}\`\ntotal videos: \`${storageStats.totalVideos.toLocaleString()}\`\ntotal images: \`${storageStats.totalImages.toLocaleString()}\`\ndisk usage: \`${storageStats.diskUsageFormatted}\``,
           inline: false,
         },
         {
@@ -984,6 +1495,320 @@ async function handleStatsCommand(interaction) {
 }
 
 /**
+ * Handle download context menu command
+ * @param {Interaction} interaction - Discord interaction
+ */
+async function handleDownloadContextMenuCommand(interaction) {
+  if (!interaction.isMessageContextMenuCommand()) {
+    return;
+  }
+
+  if (interaction.commandName !== 'download') {
+    return;
+  }
+
+  const userId = interaction.user.id;
+  const adminUser = isAdmin(userId);
+
+  logger.info(
+    `User ${userId} (${interaction.user.tag}) initiated download via context menu${adminUser ? ' [ADMIN]' : ''}`
+  );
+
+  // Check rate limit (admins bypass this check)
+  if (checkRateLimit(userId)) {
+    logger.warn(`User ${userId} (${interaction.user.tag}) is rate limited`);
+    await interaction.reply({
+      content: 'please wait 30 seconds before downloading another video.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Get the message that was right-clicked
+  const targetMessage = interaction.targetMessage;
+
+  // Extract URLs from message content
+  let url = null;
+  if (targetMessage.content) {
+    // Extract URLs from message content
+    const urlPattern = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi;
+    const urls = targetMessage.content.match(urlPattern);
+    if (urls && urls.length > 0) {
+      url = urls[0]; // Use the first URL found
+      logger.info(`Found URL in message content: ${url}`);
+    }
+  }
+
+  // Check if URL was found
+  if (!url) {
+    logger.warn(`No URL found in message for user ${userId}`);
+    await interaction.reply({
+      content: 'no URL found in this message.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Validate URL format
+  const urlValidation = validateUrl(url);
+  if (!urlValidation.valid) {
+    logger.warn(`Invalid URL for user ${userId}: ${urlValidation.error}`);
+    await interaction.reply({
+      content: `invalid URL: ${urlValidation.error}`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Check if Cobalt is enabled
+  if (!COBALT_ENABLED) {
+    await interaction.reply({
+      content: 'cobalt is not enabled.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Check if URL is from social media
+  if (!isSocialMediaUrl(url)) {
+    await interaction.reply({
+      content: 'url is not from a supported social media platform.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Defer reply since downloading may take time
+  await interaction.deferReply();
+
+  try {
+    logger.info(`Downloading file from Cobalt: ${url}`);
+    const maxSize = adminUser ? Infinity : MAX_VIDEO_SIZE;
+    const fileData = await downloadFromSocialMedia(COBALT_API_URL, url, adminUser, maxSize);
+
+    // Generate hash
+    const hash = generateHash(fileData.buffer);
+
+    // Extract extension from filename
+    const ext = path.extname(fileData.filename).toLowerCase() || '.mp4';
+
+    // Detect file type
+    const fileType = detectFileType(ext, fileData.contentType);
+
+    // Determine CDN path prefix based on file type
+    let cdnPath = '/gifs';
+    if (fileType === 'video') {
+      cdnPath = '/videos';
+    } else if (fileType === 'image') {
+      cdnPath = '/images';
+    }
+
+    // Check if file already exists and get appropriate path
+    let exists = false;
+    let filePath = null;
+    if (fileType === 'gif') {
+      exists = await gifExists(hash, GIF_STORAGE_PATH);
+      if (exists) {
+        filePath = getGifPath(hash, GIF_STORAGE_PATH);
+      }
+    } else if (fileType === 'video') {
+      exists = await videoExists(hash, ext, GIF_STORAGE_PATH);
+      if (exists) {
+        filePath = getVideoPath(hash, ext, GIF_STORAGE_PATH);
+      }
+    } else if (fileType === 'image') {
+      exists = await imageExists(hash, ext, GIF_STORAGE_PATH);
+      if (exists) {
+        filePath = getImagePath(hash, ext, GIF_STORAGE_PATH);
+      }
+    }
+
+    if (exists && filePath) {
+      const filename = path.basename(filePath);
+      const fileUrl = `${CDN_BASE_URL.replace('/gifs', cdnPath)}/${filename}`;
+      logger.info(`${fileType} already exists (hash: ${hash}) for user ${userId}`);
+      await interaction.editReply({
+        content: `${fileType} already exists : ${fileUrl}`,
+      });
+    } else {
+      // Save file based on type
+      if (fileType === 'gif') {
+        logger.info(`Saving GIF (hash: ${hash})`);
+        filePath = await saveGif(fileData.buffer, hash, GIF_STORAGE_PATH);
+      } else if (fileType === 'video') {
+        logger.info(`Saving video (hash: ${hash}, extension: ${ext})`);
+        filePath = await saveVideo(fileData.buffer, hash, ext, GIF_STORAGE_PATH);
+      } else if (fileType === 'image') {
+        logger.info(`Saving image (hash: ${hash}, extension: ${ext})`);
+        filePath = await saveImage(fileData.buffer, hash, ext, GIF_STORAGE_PATH);
+      }
+
+      const filename = path.basename(filePath);
+      const fileUrl = `${CDN_BASE_URL.replace('/gifs', cdnPath)}/${filename}`;
+
+      logger.info(
+        `Successfully saved ${fileType} (hash: ${hash}, size: ${(fileData.buffer.length / (1024 * 1024)).toFixed(2)}MB) for user ${userId}`
+      );
+
+      await interaction.editReply({
+        content: `${fileType} downloaded : ${fileUrl}`,
+      });
+    }
+  } catch (error) {
+    logger.error(`Download failed for user ${userId}:`, error);
+    await interaction.editReply({
+      content: error.message || 'an error occurred while downloading the file.',
+    });
+  }
+}
+
+/**
+ * Handle download command
+ * @param {Interaction} interaction - Discord interaction
+ */
+async function handleDownloadCommand(interaction) {
+  const userId = interaction.user.id;
+  const adminUser = isAdmin(userId);
+
+  logger.info(
+    `User ${userId} (${interaction.user.tag}) initiated download${adminUser ? ' [ADMIN]' : ''}`
+  );
+
+  // Check rate limit (admins bypass this check)
+  if (checkRateLimit(userId)) {
+    logger.warn(`User ${userId} (${interaction.user.tag}) is rate limited`);
+    await interaction.reply({
+      content: 'please wait 30 seconds before downloading another video.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Get URL from command options
+  const url = interaction.options.getString('url');
+
+  if (!url) {
+    logger.warn(`No URL provided for user ${userId}`);
+    await interaction.reply({
+      content: 'please provide a URL to download from.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Validate URL format
+  const urlValidation = validateUrl(url);
+  if (!urlValidation.valid) {
+    logger.warn(`Invalid URL for user ${userId}: ${urlValidation.error}`);
+    await interaction.reply({
+      content: `invalid URL: ${urlValidation.error}`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Check if Cobalt is enabled and URL is from social media
+  if (!COBALT_ENABLED) {
+    await interaction.reply({
+      content: 'cobalt is not enabled. please enable it to use the download command.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (!isSocialMediaUrl(url)) {
+    await interaction.reply({
+      content: 'url is not from a supported social media platform.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Defer reply since downloading may take time
+  await interaction.deferReply();
+
+  try {
+    logger.info(`Downloading file from Cobalt: ${url}`);
+    const maxSize = adminUser ? Infinity : MAX_VIDEO_SIZE;
+    const fileData = await downloadFromSocialMedia(COBALT_API_URL, url, adminUser, maxSize);
+
+    // Generate hash
+    const hash = generateHash(fileData.buffer);
+
+    // Extract extension from filename
+    const ext = path.extname(fileData.filename).toLowerCase() || '.mp4';
+
+    // Detect file type
+    const fileType = detectFileType(ext, fileData.contentType);
+
+    // Determine CDN path prefix based on file type
+    let cdnPath = '/gifs';
+    if (fileType === 'video') {
+      cdnPath = '/videos';
+    } else if (fileType === 'image') {
+      cdnPath = '/images';
+    }
+
+    // Check if file already exists and get appropriate path
+    let exists = false;
+    let filePath = null;
+    if (fileType === 'gif') {
+      exists = await gifExists(hash, GIF_STORAGE_PATH);
+      if (exists) {
+        filePath = getGifPath(hash, GIF_STORAGE_PATH);
+      }
+    } else if (fileType === 'video') {
+      exists = await videoExists(hash, ext, GIF_STORAGE_PATH);
+      if (exists) {
+        filePath = getVideoPath(hash, ext, GIF_STORAGE_PATH);
+      }
+    } else if (fileType === 'image') {
+      exists = await imageExists(hash, ext, GIF_STORAGE_PATH);
+      if (exists) {
+        filePath = getImagePath(hash, ext, GIF_STORAGE_PATH);
+      }
+    }
+
+    if (exists && filePath) {
+      const filename = path.basename(filePath);
+      const fileUrl = `${CDN_BASE_URL.replace('/gifs', cdnPath)}/${filename}`;
+      logger.info(`${fileType} already exists (hash: ${hash}) for user ${userId}`);
+      await interaction.editReply({
+        content: `${fileType} already exists : ${fileUrl}`,
+      });
+    } else {
+      // Save file based on type
+      if (fileType === 'gif') {
+        logger.info(`Saving GIF (hash: ${hash})`);
+        filePath = await saveGif(fileData.buffer, hash, GIF_STORAGE_PATH);
+      } else if (fileType === 'video') {
+        logger.info(`Saving video (hash: ${hash}, extension: ${ext})`);
+        filePath = await saveVideo(fileData.buffer, hash, ext, GIF_STORAGE_PATH);
+      } else if (fileType === 'image') {
+        logger.info(`Saving image (hash: ${hash}, extension: ${ext})`);
+        filePath = await saveImage(fileData.buffer, hash, ext, GIF_STORAGE_PATH);
+      }
+
+      const filename = path.basename(filePath);
+      const fileUrl = `${CDN_BASE_URL.replace('/gifs', cdnPath)}/${filename}`;
+
+      logger.info(
+        `Successfully saved ${fileType} (hash: ${hash}, size: ${(fileData.buffer.length / (1024 * 1024)).toFixed(2)}MB) for user ${userId}`
+      );
+
+      await interaction.editReply({
+        content: `${fileType} downloaded : ${fileUrl}`,
+      });
+    }
+  } catch (error) {
+    logger.error(`Download failed for user ${userId}:`, error);
+    await interaction.editReply({
+      content: error.message || 'an error occurred while downloading the file.',
+    });
+  }
+}
+
+/**
  * Handle slash command interaction
  * @param {Interaction} interaction - Discord interaction
  */
@@ -996,6 +1821,11 @@ async function handleSlashCommand(interaction) {
 
   if (commandName === 'stats') {
     await handleStatsCommand(interaction);
+    return;
+  }
+
+  if (commandName === 'download') {
+    await handleDownloadCommand(interaction);
     return;
   }
 
@@ -1202,8 +2032,17 @@ client.on(Events.InteractionCreate, async interaction => {
   logger.debug(
     `Received interaction: ${interaction.type} from user ${interaction.user.id} (${interaction.user.tag})`
   );
-  if (interaction.isMessageContextMenuCommand()) {
-    await handleContextMenuCommand(interaction);
+  if (interaction.isModalSubmit()) {
+    await handleModalSubmit(interaction);
+  } else if (interaction.isMessageContextMenuCommand()) {
+    // Route to appropriate handler based on command name
+    if (interaction.commandName === 'convert to gif (advanced)') {
+      await handleAdvancedContextMenuCommand(interaction);
+    } else if (interaction.commandName === 'download') {
+      await handleDownloadContextMenuCommand(interaction);
+    } else {
+      await handleContextMenuCommand(interaction);
+    }
   } else if (interaction.isChatInputCommand()) {
     await handleSlashCommand(interaction);
   }

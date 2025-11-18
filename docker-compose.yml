@@ -17,6 +17,8 @@ services:
       - ADMIN_USER_IDS=${ADMIN_USER_IDS:-}
       - STATS_USERNAME=${STATS_USERNAME:-}
       - STATS_PASSWORD=${STATS_PASSWORD:-}
+      - COBALT_API_URL=${COBALT_API_URL:-http://cobalt:9000}
+      - COBALT_ENABLED=${COBALT_ENABLED:-true}
     volumes:
       - ./data:/app/data
       - ./temp:/app/temp
@@ -85,6 +87,51 @@ services:
     deploy:
       restart_policy:
         condition: on-failure
+
+  cobalt:
+    image: ghcr.io/imputnet/cobalt:11
+    init: true
+    read_only: true
+    restart: unless-stopped
+    container_name: cobalt
+    ports:
+      # Exposed for internal Docker network access
+      # If you want to restrict to localhost only, use: - 127.0.0.1:9000:9000/tcp
+      - 9000:9000/tcp
+    environment:
+      # Replace with your public API URL if you have one, or leave as internal Docker network URL
+      # For internal use only, this can be http://cobalt:9000
+      API_URL: ${COBALT_API_URL:-http://cobalt:9000}
+      # Uncomment if you want to use cookies for fetching data from services
+      # COOKIE_PATH: "/cookies.json"
+    labels:
+      - com.centurylinklabs.watchtower.scope=cobalt
+    networks:
+      - gronka-network
+    # Uncomment only if you use the COOKIE_PATH variable
+    # volumes:
+    #   - ./cookies.json:/cookies.json
+
+  # watchtower updates the cobalt image automatically
+  watchtower:
+    image: ghcr.io/containrrr/watchtower
+    restart: unless-stopped
+    command: --cleanup --scope cobalt --interval 900 --include-restarting
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - gronka-network
+
+  # if needed, use this image for automatically generating poToken & visitor_data
+  # yt-session-generator:
+  #   image: ghcr.io/imputnet/yt-session-generator:webserver
+  #   init: true
+  #   restart: unless-stopped
+  #   container_name: yt-session-generator
+  #   labels:
+  #     - com.centurylinklabs.watchtower.scope=cobalt
+  #   networks:
+  #     - gronka-network
 
 volumes:
   cloudflared-credentials:

@@ -118,9 +118,24 @@ app.use((req, res, next) => {
 
 // Get absolute path to public directory
 const publicPath = path.resolve(process.cwd(), 'src', 'public');
+logger.debug(`Serving static files from: ${publicPath}`);
 
-// Serve static files from public directory
-app.use(express.static(publicPath));
+// Serve static files from public directory with explicit MIME type configuration
+app.use(
+  express.static(publicPath, {
+    setHeaders: (res, filePath) => {
+      // Explicitly set MIME types for CSS and JS files to prevent MIME type issues
+      if (filePath.endsWith('.css')) {
+        res.setHeader('Content-Type', 'text/css; charset=utf-8');
+      } else if (filePath.endsWith('.js')) {
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      }
+    },
+    // Use fallthrough: true to allow API routes and other handlers to work
+    // Static files will be served if they exist, otherwise request continues to next middleware
+    fallthrough: true,
+  })
+);
 
 // Dashboard route
 app.get('/', (req, res) => {
@@ -189,6 +204,17 @@ app.get('/api/crypto-prices', async (req, res) => {
       message: error.message,
     });
   }
+});
+
+// SPA fallback - serve index.html for all non-API, non-asset routes
+// This must be placed AFTER all API routes so they are matched first
+app.get('*', (req, res) => {
+  // Skip if this is an API route or asset request (shouldn't reach here, but safety check)
+  if (req.path.startsWith('/api') || req.path.startsWith('/assets')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  // Serve index.html for SPA routing
+  res.sendFile(path.join(publicPath, 'index.html'));
 });
 
 // Validate configuration

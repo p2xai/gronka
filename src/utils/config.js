@@ -145,6 +145,8 @@ function getBotConfig() {
     maxVideoSize: 500 * 1024 * 1024, // 500MB
     maxImageSize: 50 * 1024 * 1024, // 50MB
     rateLimitCooldown: 30000, // 30 seconds
+    cobaltApiUrl: getStringEnv('COBALT_API_URL', 'http://cobalt:9000'),
+    cobaltEnabled: getStringEnv('COBALT_ENABLED', 'true').toLowerCase() === 'true',
   };
 
   // Validate CDN_BASE_URL format

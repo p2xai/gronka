@@ -27,8 +27,10 @@ const {
 
 const app = express();
 
-// Trust proxy for proper IP detection in Docker network
-app.set('trust proxy', true);
+// Trust proxy for proper IP detection in Docker network and Cloudflare tunnel
+// Set to 1 to trust one proxy (Cloudflare tunnel)
+// This prevents the express-rate-limit security warning while still allowing proper IP detection
+app.set('trust proxy', 1);
 
 // Configure body parser with size limits (defensive measure)
 app.use(express.json({ limit: '1mb' }));
@@ -215,6 +217,8 @@ app.get('/', (req, res) => {
       health: '/health',
       stats: '/stats',
       gifs: '/gifs/{hash}.gif',
+      videos: '/videos/{hash}.{ext}',
+      images: '/images/{hash}.{ext}',
       terms: '/terms',
       privacy: '/privacy',
     },
@@ -242,12 +246,35 @@ app.get('/gifs/', cdnLimiter, (req, res) => {
   res.sendFile(path.join(publicPath, '404.jpg'));
 });
 
-// Custom handler for /gifs/*.gif requests - check if file exists, serve cat image if not
-app.get('/gifs/:filename', cdnLimiter, async (req, res) => {
+// Serve 404 cat image for /videos/ route
+app.get('/videos', cdnLimiter, (req, res) => {
+  res.type('image/jpeg');
+  res.sendFile(path.join(publicPath, '404.jpg'));
+});
+
+app.get('/videos/', cdnLimiter, (req, res) => {
+  res.type('image/jpeg');
+  res.sendFile(path.join(publicPath, '404.jpg'));
+});
+
+// Serve 404 cat image for /images/ route
+app.get('/images', cdnLimiter, (req, res) => {
+  res.type('image/jpeg');
+  res.sendFile(path.join(publicPath, '404.jpg'));
+});
+
+app.get('/images/', cdnLimiter, (req, res) => {
+  res.type('image/jpeg');
+  res.sendFile(path.join(publicPath, '404.jpg'));
+});
+
+// Helper function to serve files from a subdirectory
+async function serveFileFromSubdirectory(req, res, subdirectory, defaultContentType) {
   const filename = req.params.filename;
+  const subdirectoryPath = path.join(storagePath, subdirectory);
 
   // Validate filename to prevent path traversal
-  const validation = validateFilename(filename, storagePath);
+  const validation = validateFilename(filename, subdirectoryPath);
   if (!validation.valid) {
     logger.warn(`Invalid filename attempt: ${filename} - ${validation.error}`);
     res.status(400);
@@ -261,19 +288,63 @@ app.get('/gifs/:filename', cdnLimiter, async (req, res) => {
   try {
     // Check if file exists
     await fs.access(filePath);
+    
+    // Determine content type based on file extension
+    const ext = path.extname(filename).toLowerCase();
+    let contentType = defaultContentType;
+    
+    if (ext === '.gif') {
+      contentType = 'image/gif';
+    } else if (ext === '.mp4') {
+      contentType = 'video/mp4';
+    } else if (ext === '.webm') {
+      contentType = 'video/webm';
+    } else if (ext === '.mov') {
+      contentType = 'video/quicktime';
+    } else if (ext === '.avi') {
+      contentType = 'video/x-msvideo';
+    } else if (ext === '.mkv') {
+      contentType = 'video/x-matroska';
+    } else if (ext === '.png') {
+      contentType = 'image/png';
+    } else if (ext === '.jpg' || ext === '.jpeg') {
+      contentType = 'image/jpeg';
+    } else if (ext === '.webp') {
+      contentType = 'image/webp';
+    } else if (ext === '.mp3') {
+      contentType = 'audio/mpeg';
+    } else if (ext === '.m4a') {
+      contentType = 'audio/mp4';
+    }
+    
     // File exists, serve it with proper headers
-    logger.debug(`Serving GIF: ${filename}`);
+    logger.debug(`Serving file: ${filename} from ${subdirectory} (${contentType})`);
     res.set('Cache-Control', 'public, max-age=604800, immutable');
     res.set('Access-Control-Allow-Origin', CORS_ORIGIN);
-    res.set('Content-Type', 'image/gif');
+    res.set('Content-Type', contentType);
     res.sendFile(filePath);
   } catch {
     // File doesn't exist, serve cat image
-    logger.warn(`GIF not found: ${filename}`);
+    logger.warn(`File not found: ${filename} in ${subdirectory}`);
     res.status(404);
     res.type('image/jpeg');
     res.sendFile(path.join(publicPath, '404.jpg'));
   }
+}
+
+// Custom handler for /gifs/* requests - check if file exists, serve cat image if not
+app.get('/gifs/:filename', cdnLimiter, async (req, res) => {
+  await serveFileFromSubdirectory(req, res, 'gifs', 'image/gif');
+});
+
+// Custom handler for /videos/* requests
+app.get('/videos/:filename', cdnLimiter, async (req, res) => {
+  await serveFileFromSubdirectory(req, res, 'videos', 'video/mp4');
+});
+
+// Custom handler for /images/* requests
+app.get('/images/:filename', cdnLimiter, async (req, res) => {
+  await serveFileFromSubdirectory(req, res, 'images', 'image/png');
 });
 
 /**
@@ -397,6 +468,8 @@ app.get('/stats', statsLimiter, basicAuth, async (req, res) => {
     const stats = await getStorageStats(GIF_STORAGE_PATH);
     res.json({
       total_gifs: stats.totalGifs,
+      total_videos: stats.totalVideos,
+      total_images: stats.totalImages,
       disk_usage_formatted: stats.diskUsageFormatted,
       storage_path: storagePath,
     });
@@ -416,6 +489,8 @@ app.get('/api/stats', statsLimiter, basicAuth, async (req, res) => {
     const stats = await getStorageStats(GIF_STORAGE_PATH);
     res.json({
       total_gifs: stats.totalGifs,
+      total_videos: stats.totalVideos,
+      total_images: stats.totalImages,
       disk_usage_formatted: stats.diskUsageFormatted,
       storage_path: storagePath,
     });
