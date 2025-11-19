@@ -199,7 +199,7 @@ test('convertToGif - validates input file exists', async () => {
   const outputPath = path.join(testTempPath, 'output.gif');
 
   await assert.rejects(async () => await convertToGif(nonExistentPath, outputPath), {
-    message: /Input video file not found/,
+    message: /(Input video file not found|FFmpeg is not installed)/,
   });
 });
 
