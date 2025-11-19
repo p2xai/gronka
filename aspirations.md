@@ -5,4 +5,5 @@
 for cdn.p1x.dev links, process the files locally, no need to fetch, verify we have the file, fallback to link.
 use dylanninin/giflossy on docker for fast gif operations
 
-# 
+# break down the monolithic bot.js file
+    take the .js file and make seperate service related files, ie the downloader service and handlers

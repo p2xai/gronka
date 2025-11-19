@@ -75,3 +75,6 @@ src/public/assets/
 # Test coverage
 coverage/
 
+scripts/setup-glab-auth.sh
+scripts/ci-status.sh
+scripts/check-ci.sh

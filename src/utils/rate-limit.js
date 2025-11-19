@@ -1,0 +1,38 @@
+import { createLogger } from './logger.js';
+import { botConfig } from './config.js';
+
+const logger = createLogger('rate-limit');
+
+const { adminUserIds: ADMIN_USER_IDS, rateLimitCooldown: RATE_LIMIT_COOLDOWN } = botConfig;
+
+// Rate limiting: userId -> last use timestamp
+const rateLimit = new Map();
+
+/**
+ * Check if user is an admin
+ * @param {string} userId - Discord user ID
+ * @returns {boolean} True if user is admin
+ */
+export function isAdmin(userId) {
+  return ADMIN_USER_IDS.includes(userId);
+}
+
+/**
+ * Check if user is rate limited
+ * @param {string} userId - Discord user ID
+ * @returns {boolean} True if user should wait
+ */
+export function checkRateLimit(userId) {
+  // Admins bypass rate limiting
+  if (isAdmin(userId)) {
+    logger.info(`Rate limit bypassed for admin user ${userId}`);
+    return false;
+  }
+
+  const lastUse = rateLimit.get(userId);
+  if (lastUse && Date.now() - lastUse < RATE_LIMIT_COOLDOWN) {
+    return true;
+  }
+  rateLimit.set(userId, Date.now());
+  return false;
+}
