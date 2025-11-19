@@ -346,4 +346,3 @@ test('getStorageStats - only counts valid file types', async () => {
   assert.strictEqual(stats.totalVideos, 2);
   assert.strictEqual(stats.totalImages, 2);
 });
-

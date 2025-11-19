@@ -127,4 +127,3 @@ test('formatSizeMb - rounds to one decimal place', () => {
   assert.strictEqual(formatSizeMb(1538 * 1024), '1.5mb'); // Rounds down
   assert.strictEqual(formatSizeMb(1543 * 1024), '1.5mb'); // Rounds up
 });
-
