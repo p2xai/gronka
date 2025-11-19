@@ -16,6 +16,7 @@ function getDefaultUserConfig() {
     fps: null,
     width: null,
     quality: null,
+    autoOptimize: false,
   };
 }
 
@@ -129,6 +130,19 @@ function validateQuality(quality) {
 }
 
 /**
+ * Validate autoOptimize value
+ * @param {boolean} autoOptimize - AutoOptimize value to validate
+ * @returns {{valid: boolean, error?: string}} Validation result
+ */
+function validateAutoOptimize(autoOptimize) {
+  if (typeof autoOptimize !== 'boolean') {
+    return { valid: false, error: 'autoOptimize must be true or false' };
+  }
+
+  return { valid: true };
+}
+
+/**
  * Update user config with new values
  * @param {string} userId - Discord user ID
  * @param {Object} updates - Config values to update
@@ -151,29 +165,41 @@ export async function setUserConfig(userId, updates, isAdmin = false) {
     }
 
     switch (key) {
-      case 'fps':
+      case 'fps': {
         const fpsValidation = validateFps(value, isAdmin);
         if (!fpsValidation.valid) {
           return { success: false, error: fpsValidation.error };
         }
         newConfig[key] = value;
         break;
+      }
 
-      case 'width':
+      case 'width': {
         const widthValidation = validateWidth(value);
         if (!widthValidation.valid) {
           return { success: false, error: widthValidation.error };
         }
         newConfig[key] = value;
         break;
+      }
 
-      case 'quality':
+      case 'quality': {
         const qualityValidation = validateQuality(value);
         if (!qualityValidation.valid) {
           return { success: false, error: qualityValidation.error };
         }
         newConfig[key] = value;
         break;
+      }
+
+      case 'autoOptimize': {
+        const autoOptimizeValidation = validateAutoOptimize(value);
+        if (!autoOptimizeValidation.valid) {
+          return { success: false, error: autoOptimizeValidation.error };
+        }
+        newConfig[key] = value;
+        break;
+      }
 
       default:
         return { success: false, error: `unknown config key: ${key}` };
