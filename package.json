@@ -27,6 +27,8 @@
     "migrate:storage": "node scripts/migrate-storage.js",
     "fix:deps": "npm install",
     "validate": "npm run check:sync && npm run lint && npm run format:check",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
     "lint": "eslint . --max-warnings=0",
     "lint:warn": "eslint .",
     "lint:fix": "eslint . --fix",
