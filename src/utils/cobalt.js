@@ -124,15 +124,126 @@ async function callCobaltApi(apiUrl, url) {
 }
 
 /**
- * Download video from Cobalt response
- * @param {Object} cobaltResponse - Response from Cobalt API
+ * Download a single photo from a URL
+ * @param {string} photoUrl - Photo URL to download
+ * @param {number} index - Index of the photo (for filename)
  * @param {boolean} isAdminUser - Whether the user is an admin (allows larger files)
  * @param {number} maxSize - Maximum file size in bytes
  * @returns {Promise<Object>} Object with buffer, contentType, size, and filename
  */
+async function downloadPhoto(photoUrl, index, isAdminUser = false, maxSize = Infinity) {
+  try {
+    const response = await axios.get(photoUrl, {
+      responseType: 'arraybuffer',
+      timeout: 60000, // 1 minute timeout for photo downloads
+      maxContentLength: isAdminUser ? Infinity : maxSize,
+      maxRedirects: 5,
+      validateStatus: status => status >= 200 && status < 400,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'image/*,*/*',
+        Referer: photoUrl,
+      },
+    });
+
+    const buffer = Buffer.from(response.data);
+    let contentType = response.headers['content-type'] || 'image/jpeg';
+
+    // Extract filename from Content-Disposition if available
+    let filename = `photo_${index + 1}.jpg`;
+    const contentDisposition = response.headers['content-disposition'] || '';
+    if (contentDisposition) {
+      const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+      if (filenameMatch && filenameMatch[1]) {
+        filename = filenameMatch[1].replace(/['"]/g, '');
+      }
+    } else {
+      // Try to infer extension from content type
+      const extMap = {
+        'image/jpeg': '.jpg',
+        'image/jpg': '.jpg',
+        'image/png': '.png',
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+      };
+      const ext = extMap[contentType] || '.jpg';
+      filename = `photo_${index + 1}${ext}`;
+    }
+
+    logger.info(
+      `Downloaded photo ${index + 1}: ${filename}, size: ${buffer.length} bytes, content-type: ${contentType}`
+    );
+
+    return {
+      buffer,
+      contentType,
+      size: buffer.length,
+      filename,
+    };
+  } catch (error) {
+    if (error.response?.status === 413 && !isAdminUser) {
+      throw new NetworkError(`Photo ${index + 1} file is too large`);
+    }
+    if (error.response?.status === 404) {
+      throw new NetworkError(`Photo ${index + 1} not found at URL`);
+    }
+    if (error.code === 'ECONNABORTED') {
+      throw new NetworkError(`Photo ${index + 1} download timed out`);
+    }
+    throw new NetworkError(`Failed to download photo ${index + 1}: ${error.message}`);
+  }
+}
+
+/**
+ * Download multiple photos from picker array
+ * @param {Array} pickerArray - Array of picker items from Cobalt response
+ * @param {boolean} isAdminUser - Whether the user is an admin (allows larger files)
+ * @param {number} maxSize - Maximum file size in bytes
+ * @returns {Promise<Array>} Array of objects with buffer, contentType, size, and filename
+ */
+async function downloadPhotosFromPicker(pickerArray, isAdminUser = false, maxSize = Infinity) {
+  // Filter for photo items only
+  const photoItems = pickerArray.filter(item => item.type === 'photo' && item.url);
+
+  if (photoItems.length === 0) {
+    throw new NetworkError('No photos found in picker response');
+  }
+
+  logger.info(`Found ${photoItems.length} photos in picker response`);
+
+  // Download all photos
+  const downloadPromises = photoItems.map((item, index) =>
+    downloadPhoto(item.url, index, isAdminUser, maxSize)
+  );
+
+  const results = await Promise.all(downloadPromises);
+  logger.info(`Successfully downloaded ${results.length} photos from picker`);
+
+  return results;
+}
+
+/**
+ * Download video from Cobalt response
+ * @param {Object} cobaltResponse - Response from Cobalt API
+ * @param {boolean} isAdminUser - Whether the user is an admin (allows larger files)
+ * @param {number} maxSize - Maximum file size in bytes
+ * @returns {Promise<Object|Array>} Object with buffer, contentType, size, and filename (or array of objects for picker)
+ */
 async function downloadFromCobalt(cobaltResponse, isAdminUser = false, maxSize = Infinity) {
   // Cobalt API returns different response formats depending on the platform
-  // Check for direct video URL first
+
+  // Check for picker response (e.g., TikTok slideshows with photos)
+  if (
+    cobaltResponse.status === 'picker' &&
+    cobaltResponse.picker &&
+    Array.isArray(cobaltResponse.picker)
+  ) {
+    logger.info('Detected picker response with photos');
+    return await downloadPhotosFromPicker(cobaltResponse.picker, isAdminUser, maxSize);
+  }
+
+  // Check for direct video URL
   let videoUrl = null;
   let filename = 'video.mp4';
 
@@ -251,12 +362,12 @@ async function downloadFromCobalt(cobaltResponse, isAdminUser = false, maxSize =
 }
 
 /**
- * Download video from social media URL using Cobalt
+ * Download video or photos from social media URL using Cobalt
  * @param {string} apiUrl - Cobalt API URL
  * @param {string} url - Social media URL
  * @param {boolean} isAdminUser - Whether the user is an admin
  * @param {number} maxSize - Maximum file size in bytes
- * @returns {Promise<Object>} Object with buffer, contentType, size, and filename
+ * @returns {Promise<Object|Array>} Object with buffer, contentType, size, and filename (or array for multiple photos)
  */
 export async function downloadFromSocialMedia(
   apiUrl,
@@ -269,11 +380,19 @@ export async function downloadFromSocialMedia(
   try {
     const cobaltResponse = await callCobaltApi(apiUrl, url);
     logger.info(`Cobalt API response: ${JSON.stringify(cobaltResponse)}`);
-    logger.info('Cobalt API call successful, downloading video');
+    logger.info('Cobalt API call successful, downloading media');
     const result = await downloadFromCobalt(cobaltResponse, isAdminUser, maxSize);
-    logger.info(
-      `Successfully downloaded video from Cobalt: ${result.filename} (${result.size} bytes, content-type: ${result.contentType})`
-    );
+
+    // Check if result is an array (multiple photos) or single object
+    if (Array.isArray(result)) {
+      logger.info(
+        `Successfully downloaded ${result.length} photos from Cobalt (total size: ${result.reduce((sum, r) => sum + r.size, 0)} bytes)`
+      );
+    } else {
+      logger.info(
+        `Successfully downloaded media from Cobalt: ${result.filename} (${result.size} bytes, content-type: ${result.contentType})`
+      );
+    }
     return result;
   } catch (error) {
     logger.warn(`Cobalt download failed: ${error.message}`);

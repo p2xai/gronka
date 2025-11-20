@@ -84,6 +84,69 @@ async function processDownload(interaction, url) {
     const maxSize = adminUser ? Infinity : MAX_VIDEO_SIZE;
     const fileData = await downloadFromSocialMedia(COBALT_API_URL, url, adminUser, maxSize);
 
+    // Check if we got multiple photos (array) or single file
+    if (Array.isArray(fileData)) {
+      // Handle multiple photos from picker
+      logger.info(`Processing ${fileData.length} photos from picker`);
+      const photoResults = [];
+      let totalSize = 0;
+
+      for (let i = 0; i < fileData.length; i++) {
+        const photo = fileData[i];
+        const hash = generateHash(photo.buffer);
+        const ext = path.extname(photo.filename).toLowerCase() || '.jpg';
+        const _fileType = detectFileType(ext, photo.contentType);
+
+        // Check if photo already exists
+        const exists = await imageExists(hash, ext, GIF_STORAGE_PATH);
+        let filePath;
+        let fileUrl;
+
+        if (exists) {
+          filePath = getImagePath(hash, ext, GIF_STORAGE_PATH);
+          if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+            fileUrl = filePath;
+          } else {
+            const filename = path.basename(filePath);
+            fileUrl = `${CDN_BASE_URL.replace('/gifs', '/images')}/${filename}`;
+          }
+          logger.info(`Photo ${i + 1} already exists (hash: ${hash})`);
+        } else {
+          // Save the photo
+          logger.info(`Saving photo ${i + 1} (hash: ${hash}, extension: ${ext})`);
+          filePath = await saveImage(photo.buffer, hash, ext, GIF_STORAGE_PATH, buildMetadata());
+
+          if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+            fileUrl = filePath;
+          } else {
+            const filename = path.basename(filePath);
+            fileUrl = `${CDN_BASE_URL.replace('/gifs', '/images')}/${filename}`;
+          }
+          logger.info(`Successfully saved photo ${i + 1} (hash: ${hash})`);
+        }
+
+        photoResults.push({ url: fileUrl, size: photo.size });
+        totalSize += photo.size;
+      }
+
+      // Update operation to success
+      updateOperationStatus(operationId, 'success', {
+        fileSize: totalSize,
+        photoCount: photoResults.length,
+      });
+
+      // Build reply with all photo URLs
+      const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+      const photoUrls = photoResults.map(p => p.url).join('\n');
+      const replyContent = `downloaded ${photoResults.length} photos:\n${photoUrls}\n-# total size: ${totalSizeMB} mb`;
+
+      await interaction.editReply({
+        content: replyContent,
+      });
+      return;
+    }
+
+    // Single file handling (existing code)
     // Generate hash
     let hash = generateHash(fileData.buffer);
 

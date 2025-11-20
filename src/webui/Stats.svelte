@@ -40,11 +40,11 @@
       </div>
       <div class="stat-item">
         <dt>Videos</dt>
-        <dd>{stats.videos_disk_usage_formatted || '0.00 MB'}</dd>
+        <dd>{stats.total_videos?.toLocaleString() || '0'} ({stats.videos_disk_usage_formatted || '0.00 MB'})</dd>
       </div>
       <div class="stat-item">
         <dt>Images</dt>
-        <dd>{stats.images_disk_usage_formatted || '0.00 MB'}</dd>
+        <dd>{stats.total_images?.toLocaleString() || '0'} ({stats.images_disk_usage_formatted || '0.00 MB'})</dd>
       </div>
       <div class="stat-item">
         <dt>Total</dt>
