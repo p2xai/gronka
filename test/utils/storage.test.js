@@ -14,6 +14,7 @@ import {
   saveVideo,
   imageExists,
   saveImage,
+  invalidateStatsCache,
 } from '../../src/utils/storage.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -317,6 +318,9 @@ test('getStorageStats - calculates formatted sizes correctly', async () => {
   mkdirSync(gifsDir, { recursive: true });
   const fileSize = 1024 * 1024;
   writeFileSync(gifPath, Buffer.alloc(fileSize));
+
+  // Invalidate cache after manually writing file (like saveGif does)
+  invalidateStatsCache(testStoragePath);
 
   const stats = await getStorageStats(testStoragePath);
   // Stats may include other files, so check at least our file size is included
