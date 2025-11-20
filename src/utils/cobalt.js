@@ -5,6 +5,87 @@ import { NetworkError } from './errors.js';
 const logger = createLogger('cobalt');
 
 /**
+ * Custom error for rate limiting
+ */
+export class RateLimitError extends NetworkError {
+  constructor(message, retryAfter = null) {
+    super(message);
+    this.name = 'RateLimitError';
+    this.retryAfter = retryAfter;
+  }
+}
+
+/**
+ * Check if error response indicates rate limiting vs content not found
+ * @param {Object} data - Cobalt API error response data
+ * @param {number} responseTime - Time taken for request in ms
+ * @param {Object} errorObj - Full axios error object
+ * @returns {Object} { isRateLimit: boolean, isNotFound: boolean }
+ */
+function analyzeError(data, responseTime, errorObj) {
+  const result = { isRateLimit: false, isNotFound: false };
+
+  // Check for explicit rate limit indicators
+  if (data?.error?.code && data.error.code.includes('rate')) {
+    result.isRateLimit = true;
+    return result;
+  }
+
+  // Check HTTP status code (429 is definitive rate limit)
+  if (errorObj?.response?.status === 429) {
+    result.isRateLimit = true;
+    return result;
+  }
+
+  // error.api.fetch.empty is ambiguous - use heuristics
+  if (data?.error?.code === 'error.api.fetch.empty' || data?.code === 'error.api.fetch.empty') {
+    // Check response text for clues
+    const errorText = (data?.error?.text || data?.text || '').toLowerCase();
+
+    // Explicit "not found" or "doesn't exist" messages
+    if (
+      errorText.includes('not found') ||
+      errorText.includes("doesn't exist") ||
+      errorText.includes('unavailable') ||
+      errorText.includes('deleted')
+    ) {
+      result.isNotFound = true;
+      return result;
+    }
+
+    // Response timing heuristic:
+    // - Instant failure (< 1s) often means content doesn't exist
+    // - Slower failure (> 2s) suggests rate limiting or network issues
+    if (responseTime < 1000) {
+      logger.info(`Fast failure (${responseTime}ms) suggests content may not exist`);
+      result.isNotFound = true;
+      return result;
+    } else if (responseTime > 2000) {
+      logger.info(`Slow failure (${responseTime}ms) suggests rate limiting`);
+      result.isRateLimit = true;
+      return result;
+    }
+
+    // Default to rate limit for ambiguous cases (conservative approach)
+    // User can still cancel if they know content doesn't exist
+    logger.warn(`Ambiguous error.api.fetch.empty (${responseTime}ms) - assuming rate limit`);
+    result.isRateLimit = true;
+    return result;
+  }
+
+  return result;
+}
+
+/**
+ * Sleep for specified milliseconds
+ * @param {number} ms - Milliseconds to sleep
+ * @returns {Promise<void>}
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
  * Social media domains that Cobalt can handle
  */
 const SOCIAL_MEDIA_DOMAINS = [
@@ -48,13 +129,21 @@ export function isSocialMediaUrl(url) {
 }
 
 /**
- * Call Cobalt API to get video information
+ * Call Cobalt API to get video information with retry logic
  * @param {string} apiUrl - Cobalt API URL
  * @param {string} url - Social media URL to process
+ * @param {number} retryCount - Current retry attempt (0-based)
+ * @param {number} maxRetries - Maximum number of retries
  * @returns {Promise<Object>} Cobalt API response
  */
-async function callCobaltApi(apiUrl, url) {
-  logger.info(`Calling Cobalt API at ${apiUrl} with URL: ${url}`);
+async function callCobaltApi(apiUrl, url, retryCount = 0, maxRetries = 3) {
+  const attemptNum = retryCount + 1;
+  logger.info(
+    `Calling Cobalt API at ${apiUrl} with URL: ${url} (attempt ${attemptNum}/${maxRetries})`
+  );
+
+  const startTime = Date.now();
+
   try {
     const response = await axios.post(
       apiUrl,
@@ -82,10 +171,34 @@ async function callCobaltApi(apiUrl, url) {
 
     return response.data;
   } catch (error) {
+    const responseTime = Date.now() - startTime;
+
     if (error.response) {
       const status = error.response.status;
       const data = error.response.data;
-      logger.error(`Cobalt API error response: status=${status}, data=${JSON.stringify(data)}`);
+      logger.error(
+        `Cobalt API error response: status=${status}, data=${JSON.stringify(data)}, responseTime=${responseTime}ms`
+      );
+
+      // Analyze error to determine if it's rate limiting or not found
+      const errorAnalysis = analyzeError(data, responseTime, error);
+
+      // If content doesn't exist, don't retry
+      if (errorAnalysis.isNotFound) {
+        logger.error('Content appears to be deleted, unavailable, or does not exist');
+        throw new NetworkError('content not found, deleted, or unavailable');
+      }
+
+      // If rate limited and we have retries left, retry with backoff
+      if (errorAnalysis.isRateLimit && retryCount < maxRetries - 1) {
+        // Calculate exponential backoff delay: 1s, 2s, 4s
+        const delayMs = Math.pow(2, retryCount) * 1000;
+        logger.warn(
+          `Rate limit detected, retrying in ${delayMs}ms (attempt ${attemptNum}/${maxRetries})`
+        );
+        await sleep(delayMs);
+        return callCobaltApi(apiUrl, url, retryCount + 1, maxRetries);
+      }
 
       // Extract error message, ensuring it's always a string
       let message = null;
@@ -106,6 +219,11 @@ async function callCobaltApi(apiUrl, url) {
       // Fallback to status code if no message found
       if (!message) {
         message = `Cobalt API error: ${status}`;
+      }
+
+      // If this is a rate limit error after all retries, throw RateLimitError
+      if (errorAnalysis.isRateLimit) {
+        throw new RateLimitError(message);
       }
 
       throw new NetworkError(message);

@@ -1,11 +1,11 @@
-import { MessageFlags } from 'discord.js';
+import { MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { createLogger } from '../utils/logger.js';
 import { botConfig } from '../utils/config.js';
 import { validateUrl } from '../utils/validation.js';
-import { isSocialMediaUrl, downloadFromSocialMedia } from '../utils/cobalt.js';
+import { isSocialMediaUrl, downloadFromSocialMedia, RateLimitError } from '../utils/cobalt.js';
 import { checkRateLimit, isAdmin } from '../utils/rate-limit.js';
 import { getUserConfig } from '../utils/user-config.js';
 import { generateHash } from '../utils/file-downloader.js';
@@ -23,6 +23,7 @@ import {
   detectFileType,
 } from '../utils/storage.js';
 import { optimizeGif, calculateSizeReduction, formatSizeMb } from '../utils/gif-optimizer.js';
+import { queueCobaltRequest } from '../utils/cobalt-queue.js';
 
 const logger = createLogger('download');
 
@@ -82,7 +83,11 @@ async function processDownload(interaction, url) {
 
     logger.info(`Downloading file from Cobalt: ${url}`);
     const maxSize = adminUser ? Infinity : MAX_VIDEO_SIZE;
-    const fileData = await downloadFromSocialMedia(COBALT_API_URL, url, adminUser, maxSize);
+
+    // Wrap Cobalt download in queue to handle concurrency and deduplication
+    const fileData = await queueCobaltRequest(url, async () => {
+      return await downloadFromSocialMedia(COBALT_API_URL, url, adminUser, maxSize);
+    });
 
     // Check if we got multiple photos (array) or single file
     if (Array.isArray(fileData)) {
@@ -199,8 +204,14 @@ async function processDownload(interaction, url) {
       // Get file size for existing file
       let existingSize = fileData.buffer.length;
       if (!filePath.startsWith('http://') && !filePath.startsWith('https://')) {
-        const stats = await fs.stat(filePath);
-        existingSize = stats.size;
+        // Try to stat local file, but it might only exist in R2
+        try {
+          const stats = await fs.stat(filePath);
+          existingSize = stats.size;
+        } catch {
+          // File only exists in R2, use buffer size as approximation
+          logger.debug(`File exists in R2 but not locally, using buffer size: ${existingSize}`);
+        }
       }
       updateOperationStatus(operationId, 'success', { fileSize: existingSize });
       await interaction.editReply({
@@ -293,6 +304,32 @@ async function processDownload(interaction, url) {
     }
   } catch (error) {
     logger.error(`Download failed for user ${userId}:`, error);
+
+    // Check if this is a rate limit error after retries
+    if (error instanceof RateLimitError) {
+      logger.warn(`Rate limit error for user ${userId}, showing deferred download option`);
+
+      // Create buttons for user to choose
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`defer_download:${Buffer.from(url).toString('base64')}`)
+          .setLabel('try again later')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('cancel_download')
+          .setLabel('cancel')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      updateOperationStatus(operationId, 'error', { error: 'rate limited' });
+
+      await interaction.editReply({
+        content:
+          "download failed due to rate limiting. would you like to try again later? you'll receive a notification when it's ready.",
+        components: [row],
+      });
+      return;
+    }
 
     // Safely extract error message, handling cases where it might be an object or undefined
     let errorMessage = 'an error occurred while downloading the file.';

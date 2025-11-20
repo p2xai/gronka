@@ -155,16 +155,30 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 // Register commands globally
 (async () => {
   try {
-    console.log('registering global application (/) commands...');
+    console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('registering global application commands');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
     // Register commands globally
     const data = await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
 
-    console.log(`successfully registered ${data.length} global application command(s).`);
-    console.log(
-      'commands registered: "convert to gif" (context menu), "convert to gif (advanced)" (context menu), "download" (context menu), "optimize" (context menu), "/convert", "/optimize", "/stats", "/download" (slash commands)'
-    );
-    console.log('it may take up to an hour for the commands to appear in discord.');
+    console.log(`✓ successfully registered ${data.length} command(s)\n`);
+
+    console.log('context menu commands:');
+    console.log('  • convert to gif');
+    console.log('  • convert to gif (advanced)');
+    console.log('  • download');
+    console.log('  • optimize');
+
+    console.log('\nslash commands:');
+    console.log('  • /convert');
+    console.log('  • /optimize');
+    console.log('  • /stats');
+    console.log('  • /download');
+
+    console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('note: commands may take up to 1 hour to appear in discord');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   } catch (error) {
     console.error('an error occurred:', error);
 
