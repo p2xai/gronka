@@ -32,6 +32,7 @@
     "lint:warn": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
+    "format:write": "prettier --write .",
     "format:check": "prettier --check .",
     "jekyll:serve": "bundle exec jekyll serve --port 5173 --host 0.0.0.0",
     "jekyll:build": "bundle exec jekyll build",

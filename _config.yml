@@ -21,6 +21,9 @@ plugins:
   - jekyll-seo-tag
   - jekyll-sitemap
 
+# excerpt settings
+excerpt_separator: "<!--more-->"
+
 # collections
 collections:
   docs:
@@ -38,6 +41,11 @@ defaults:
       path: "docs.md"
     values:
       layout: doc
+  - scope:
+      path: "_posts"
+      type: posts
+    values:
+      layout: post
 
 # exclude
 exclude:
