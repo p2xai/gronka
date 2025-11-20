@@ -6,7 +6,7 @@ This project consists of multiple components that can run independently or toget
 - **CDN Server** (`src/server.js`) - Serves converted GIFs and provides API endpoints
 - **WebUI** (`src/webui-server.js`) - Optional dashboard for viewing statistics
 
-When running in Docker, the main `app` service runs both the bot and CDN server together. The webui and cloudflared tunnel are optional services that can be enabled via Docker Compose profiles.
+When running in Docker, the main `app` service runs both the bot and CDN server together. The webui is an optional service that can be enabled via Docker Compose profiles.
 
 ## Dependency Management
 
@@ -55,7 +55,8 @@ If any check fails, the commit will be blocked. Fix the issues and try again.
 This project uses ESLint for code linting. Available commands:
 
 ```bash
-npm run lint          # Check for linting errors
+npm run lint          # Check for linting errors (fails on warnings)
+npm run lint:warn     # Check for linting errors (allows warnings)
 npm run lint:fix      # Automatically fix linting errors
 ```
 
@@ -89,10 +90,11 @@ This will check:
 The project uses Docker Compose with multiple services. The main app service runs both the Discord bot and CDN server:
 
 ```bash
-npm run docker              # Start all services (app only by default)
-npm run docker:rebuild     # Rebuild and start containers
-npm run docker:stop        # Stop all containers
+npm run docker:up          # Start all services (app only by default)
+npm run docker:down        # Stop all containers
+npm run docker:reload      # Reload containers (rebuild and restart)
 npm run docker:restart     # Restart all containers
+npm run docker:register    # Register Discord commands in container
 ```
 
 ### Docker Compose Profiles
@@ -100,35 +102,31 @@ npm run docker:restart     # Restart all containers
 Optional services are available via Docker Compose profiles:
 
 - **webui** - Dashboard for viewing stats (runs on port 3001)
-- **tunnel** - Cloudflare tunnel for exposing the CDN
 
 To start optional services:
 
 ```bash
 # Start webui
-npm run docker:start:webui
-# or
 docker compose --profile webui up -d webui
 
-# Start tunnel
-npm run docker:start:tunnel
-# or
-docker compose --profile tunnel up -d cloudflared
-
 # Start all services including profiles
-docker compose --profile webui --profile tunnel up -d
+docker compose --profile webui up -d
 ```
 
 ### Common Docker Commands
 
 ```bash
 npm run docker:logs        # View logs for all services
-npm run docker:logs:app    # View logs for app service
-npm run docker:logs:webui  # View logs for webui service
-npm run docker:logs:tunnel # View logs for tunnel service
-npm run docker:status      # Check container status
-npm run docker:shell       # Open shell in app container
-npm run docker:clean       # Stop containers and clean up
+npm run docker:down        # Stop all containers
+npm run docker:reload      # Reload containers (rebuild and restart)
+npm run docker:restart     # Restart all containers
+npm run docker:register    # Register Discord commands in container
+
+# Manual docker compose commands
+docker compose ps           # Check container status
+docker compose exec app sh  # Open shell in app container
+docker compose logs -f app  # View logs for app service only
+docker compose logs -f webui # View logs for webui service only
 ```
 
 ### Troubleshooting Docker Build Issues
@@ -155,7 +153,7 @@ npm error `npm ci` can only install packages when your package.json and package-
 3. Push and rebuild:
    ```bash
    git push
-   npm run docker:rebuild
+   npm run docker:reload
    ```
 
 #### Missing Environment Variables
@@ -177,8 +175,9 @@ If the Docker build fails during the `npm ci` step:
 2. Check that you're using the correct Node version (Node 20 as specified in Dockerfile)
 3. Try cleaning Docker cache:
    ```bash
-   npm run docker:clean
-   npm run docker:rebuild
+   docker compose down
+   docker system prune -a
+   npm run docker:up
    ```
 
 ## Available Scripts
@@ -197,22 +196,27 @@ See `package.json` for a full list of available npm scripts. Common ones include
 
 - `npm run register-commands` - Register Discord slash commands
 - `npm run build:webui` - Build the webui frontend
-- `npm run tunnel` - Run cloudflared tunnel locally
+- `npm run webui:dev` - Run webui in development mode with hot reload
+- `npm run webui:dev:server` - Run webui server only (port 3002)
+- `npm run test` - Run tests
+- `npm run test:watch` - Run tests in watch mode
+- `npm run migrate:storage` - Migrate storage to R2
+- `npm run upload:404` - Upload 404 image to R2
 
 ### Docker
 
-- `npm run docker` - Start Docker containers
-- `npm run docker:rebuild` - Rebuild and start Docker containers
-- `npm run docker:stop` - Stop all containers
+- `npm run docker:up` - Start Docker containers
+- `npm run docker:down` - Stop all containers
+- `npm run docker:reload` - Reload containers (rebuild and restart)
 - `npm run docker:restart` - Restart all containers
 - `npm run docker:logs` - View logs for all services
-- `npm run docker:status` - Check container status
-- `npm run docker:clean` - Stop containers and clean up
+- `npm run docker:register` - Register Discord commands in container
 
 ### Code Quality
 
 - `npm run check:sync` - Check if package-lock.json is in sync
-- `npm run lint` - Run ESLint
+- `npm run lint` - Run ESLint (fails on warnings)
+- `npm run lint:warn` - Run ESLint (allows warnings)
 - `npm run lint:fix` - Automatically fix linting errors
 - `npm run format` - Format code with Prettier
 - `npm run format:check` - Check if files are formatted correctly

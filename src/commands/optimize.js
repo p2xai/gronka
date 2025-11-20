@@ -101,7 +101,7 @@ export async function processOptimization(
     // Format response message
     const reductionText = reduction >= 0 ? `-${reduction}%` : `+${Math.abs(reduction)}%`;
     await interaction.editReply({
-      content: `gif optimized: ${optimizedUrl}\ngif size ${optimizedSizeMb} (${reductionText})`,
+      content: `gif optimized: ${optimizedUrl}\n-# gif size ${optimizedSizeMb} (${reductionText})`,
     });
   } catch (error) {
     logger.error(`GIF optimization failed for user ${userId}:`, error);
@@ -192,11 +192,8 @@ export async function handleOptimizeContextMenuCommand(interaction, modalAttachm
       return;
     }
 
-    // Defer reply since downloading may take time
-    await interaction.deferReply();
-
     try {
-      // Check if it's a cdn.p1x.dev URL and try to use local file
+      // Check if it's a cdn.gronka.p1x.dev or cdn.p1x.dev URL and try to use local file
       const hash = extractHashFromCdnUrl(url);
       let useLocalFile = false;
       let localFilePath = null;
@@ -206,7 +203,7 @@ export async function handleOptimizeContextMenuCommand(interaction, modalAttachm
         if (exists) {
           localFilePath = getGifPath(hash, GIF_STORAGE_PATH);
           useLocalFile = true;
-          logger.info(`Using local file for cdn.p1x.dev URL: ${localFilePath}`);
+          logger.info(`Using local file for cdn URL: ${localFilePath}`);
         }
       }
 
@@ -217,8 +214,9 @@ export async function handleOptimizeContextMenuCommand(interaction, modalAttachm
 
         // Validate it's a GIF
         if (!isGifFile(fileData.filename, fileData.contentType)) {
-          await interaction.editReply({
+          await interaction.reply({
             content: 'this command only works on gif files.',
+            flags: MessageFlags.Ephemeral,
           });
           return;
         }
@@ -245,8 +243,9 @@ export async function handleOptimizeContextMenuCommand(interaction, modalAttachm
       }
     } catch (error) {
       logger.error(`Failed to process URL for user ${userId}:`, error);
-      await interaction.editReply({
+      await interaction.reply({
         content: error.message || 'failed to process gif from URL.',
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -374,7 +373,7 @@ export async function handleOptimizeCommand(interaction) {
     await interaction.deferReply();
 
     try {
-      // Check if it's a cdn.p1x.dev URL and try to use local file
+      // Check if it's a cdn.gronka.p1x.dev or cdn.p1x.dev URL and try to use local file
       const hash = extractHashFromCdnUrl(url);
       let useLocalFile = false;
       let localFilePath = null;
@@ -384,7 +383,7 @@ export async function handleOptimizeCommand(interaction) {
         if (exists) {
           localFilePath = getGifPath(hash, GIF_STORAGE_PATH);
           useLocalFile = true;
-          logger.info(`Using local file for cdn.p1x.dev URL: ${localFilePath}`);
+          logger.info(`Using local file for cdn URL: ${localFilePath}`);
         }
       }
 

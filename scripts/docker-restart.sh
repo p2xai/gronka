@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-PROFILES="--profile webui --profile tunnel"
+PROFILES="--profile webui"
 TIMEOUT=120
 
 # Colors for output
@@ -31,7 +31,7 @@ fi
 info "Restarting docker compose services..."
 
 # Step 1: Restart containers
-info "Restarting containers with profiles: webui, tunnel"
+info "Restarting containers with profiles: webui"
 if ! docker compose $PROFILES restart; then
   error "Failed to restart containers"
 fi

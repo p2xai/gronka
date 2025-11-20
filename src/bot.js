@@ -4,7 +4,6 @@ import { botConfig } from './utils/config.js';
 import { ConfigurationError } from './utils/errors.js';
 import { trackUser, initializeUserTracking } from './utils/user-tracking.js';
 import { handleStatsCommand } from './commands/stats.js';
-import { handleConfigCommand } from './commands/config.js';
 import { handleDownloadCommand, handleDownloadContextMenuCommand } from './commands/download.js';
 import { handleOptimizeCommand, handleOptimizeContextMenuCommand } from './commands/optimize.js';
 import { handleConvertCommand, handleConvertContextMenu } from './commands/convert.js';
@@ -84,8 +83,6 @@ client.on(Events.InteractionCreate, async interaction => {
       await handleStatsCommand(interaction, botStartTime);
     } else if (commandName === 'download') {
       await handleDownloadCommand(interaction);
-    } else if (commandName === 'config') {
-      await handleConfigCommand(interaction);
     } else if (commandName === 'optimize') {
       await handleOptimizeCommand(interaction);
     } else if (commandName === 'convert') {

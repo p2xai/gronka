@@ -147,60 +147,6 @@ const commands = [
     integration_types: [1], // USER_INSTALL - allows users to install the bot directly
     contexts: [0, 1, 2], // GUILD (0), BOT_DM (1), PRIVATE_CHANNEL (2) - enables command usage in all contexts
   },
-  {
-    name: 'config',
-    description: 'view or modify your personal configuration settings (admin only)',
-    type: 1, // CHAT_INPUT type (slash command)
-    options: [
-      {
-        name: 'view',
-        description: 'view your current configuration',
-        type: 1, // SUB_COMMAND type
-      },
-      {
-        name: 'set',
-        description: 'set configuration values',
-        type: 1, // SUB_COMMAND type
-        options: [
-          {
-            name: 'fps',
-            description:
-              'frames per second for gif conversion (max 30 for admins, max 15 for others)',
-            type: 10, // NUMBER type
-            required: false,
-          },
-          {
-            name: 'width',
-            description: 'width in pixels for gif conversion (1-4096)',
-            type: 10, // NUMBER type
-            required: false,
-          },
-          {
-            name: 'quality',
-            description: 'quality preset for gif conversion',
-            type: 3, // STRING type
-            required: false,
-            choices: [
-              { name: 'low', value: 'low' },
-              { name: 'medium', value: 'medium' },
-              { name: 'high', value: 'high' },
-            ],
-          },
-          {
-            name: 'auto_optimize',
-            description:
-              'automatically optimize gifs after conversion or download (default: false)',
-            type: 5, // BOOLEAN type
-            required: false,
-          },
-        ],
-      },
-    ],
-    default_member_permissions: null, // Permission check done in handler
-    dm_permission: true, // Enable in DMs
-    integration_types: [1], // USER_INSTALL - allows users to install the bot directly
-    contexts: [0, 1, 2], // GUILD (0), BOT_DM (1), PRIVATE_CHANNEL (2) - enables command usage in all contexts
-  },
 ];
 
 // Construct and prepare an instance of the REST module
@@ -216,7 +162,7 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
     console.log(`successfully registered ${data.length} global application command(s).`);
     console.log(
-      'commands registered: "convert to gif" (context menu), "convert to gif (advanced)" (context menu), "download" (context menu), "optimize" (context menu), "/convert", "/optimize", "/stats", "/download", "/config" (slash commands)'
+      'commands registered: "convert to gif" (context menu), "convert to gif (advanced)" (context menu), "download" (context menu), "optimize" (context menu), "/convert", "/optimize", "/stats", "/download" (slash commands)'
     );
     console.log('it may take up to an hour for the commands to appear in discord.');
   } catch (error) {

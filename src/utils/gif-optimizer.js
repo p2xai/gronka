@@ -39,23 +39,39 @@ export function isGifFile(filename, contentType) {
 }
 
 /**
- * Extract hash from cdn.p1x.dev URL
- * @param {string} url - URL to parse (e.g., https://cdn.p1x.dev/gifs/abc123.gif)
- * @returns {string|null} Extracted hash or null if not a valid cdn.p1x.dev URL
+ * Extract hash from cdn URL (supports cdn.gronka.p1x.dev and cdn.p1x.dev)
+ * @param {string} url - URL to parse (e.g., https://cdn.gronka.p1x.dev/gifs/abc123.gif)
+ * @returns {string|null} Extracted hash or null if not a valid cdn URL
  */
 export function extractHashFromCdnUrl(url) {
   try {
     const urlObj = new URL(url);
 
-    // Check if it's a cdn.p1x.dev URL
-    if (urlObj.hostname !== 'cdn.p1x.dev' && !urlObj.hostname.endsWith('.p1x.dev')) {
+    // Check if it's a cdn.p1x.dev or cdn.gronka.p1x.dev URL
+    if (
+      urlObj.hostname !== 'cdn.p1x.dev' &&
+      urlObj.hostname !== 'cdn.gronka.p1x.dev' &&
+      !urlObj.hostname.endsWith('.p1x.dev')
+    ) {
       return null;
     }
 
-    // Parse path pattern: /gifs/{hash}.gif
-    const pathMatch = urlObj.pathname.match(/^\/gifs\/([a-f0-9]+)\.gif$/i);
-    if (pathMatch && pathMatch[1]) {
-      return pathMatch[1];
+    // Parse path patterns: /gifs/{hash}.gif, /videos/{hash}.{ext}, /images/{hash}.{ext}
+    const gifPathMatch = urlObj.pathname.match(/^\/gifs\/([a-f0-9]+)\.gif$/i);
+    if (gifPathMatch && gifPathMatch[1]) {
+      return gifPathMatch[1];
+    }
+
+    const videoPathMatch = urlObj.pathname.match(
+      /^\/videos\/([a-f0-9]+)\.(mp4|webm|mov|avi|mkv)$/i
+    );
+    if (videoPathMatch && videoPathMatch[1]) {
+      return videoPathMatch[1];
+    }
+
+    const imagePathMatch = urlObj.pathname.match(/^\/images\/([a-f0-9]+)\.(png|jpg|jpeg|webp)$/i);
+    if (imagePathMatch && imagePathMatch[1]) {
+      return imagePathMatch[1];
     }
 
     return null;

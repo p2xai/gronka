@@ -1,6 +1,16 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { createLogger } from './logger.js';
+import { r2Config } from './config.js';
+import {
+  uploadGifToR2,
+  uploadVideoToR2,
+  uploadImageToR2,
+  gifExistsInR2,
+  videoExistsInR2,
+  imageExistsInR2,
+  getR2PublicUrl,
+} from './r2-storage.js';
 
 const logger = createLogger('storage');
 
@@ -62,10 +72,20 @@ export function detectFileType(extension, contentType = '') {
 /**
  * Check if a GIF with the given hash already exists
  * @param {string} hash - MD5 hash of the video
- * @param {string} storagePath - Base storage path
+ * @param {string} storagePath - Base storage path (kept for backward compatibility)
  * @returns {Promise<boolean>} True if GIF exists
  */
 export async function gifExists(hash, storagePath) {
+  // Check R2 first if configured
+  if (
+    r2Config.accountId &&
+    r2Config.accessKeyId &&
+    r2Config.secretAccessKey &&
+    r2Config.bucketName
+  ) {
+    return await gifExistsInR2(hash, r2Config);
+  }
+  // Fallback to local disk check
   try {
     const gifPath = getGifPath(hash, storagePath);
     await fs.access(gifPath);
@@ -89,13 +109,50 @@ export function getGifPath(hash, storagePath) {
 }
 
 /**
- * Save a GIF buffer to disk
+ * Save a GIF buffer to R2 or disk
  * @param {Buffer} buffer - GIF file buffer
  * @param {string} hash - MD5 hash of the video
- * @param {string} storagePath - Base storage path
- * @returns {Promise<string>} Path to saved GIF file
+ * @param {string} storagePath - Base storage path (for local fallback)
+ * @param {string|null} [userId=null] - Optional Discord user ID to attach as metadata
+ * @returns {Promise<string>} Public URL or path to saved GIF file
  */
-export async function saveGif(buffer, hash, storagePath) {
+export async function saveGif(buffer, hash, storagePath, userId = null) {
+  // Upload to R2 if configured
+  if (
+    r2Config.accountId &&
+    r2Config.accessKeyId &&
+    r2Config.secretAccessKey &&
+    r2Config.bucketName
+  ) {
+    try {
+      // Check if file already exists in R2 specifically (not local disk)
+      const existsInR2 = await gifExistsInR2(hash, r2Config);
+      if (existsInR2) {
+        // File already exists in R2, return the public URL
+        const safeHash = hash.replace(/[^a-f0-9]/gi, '');
+        const key = `gifs/${safeHash}.gif`;
+        const publicUrl = getR2PublicUrl(key, r2Config);
+        logger.info(`GIF already exists in R2: ${publicUrl}`);
+        return publicUrl;
+      }
+
+      // Upload to R2
+      logger.info(
+        `Uploading GIF to R2 (hash: ${hash.substring(0, 8)}..., size: ${(buffer.length / (1024 * 1024)).toFixed(2)}MB)`
+      );
+      const publicUrl = await uploadGifToR2(buffer, hash, r2Config, userId);
+      logger.info(
+        `Saved GIF to R2: ${publicUrl} (size: ${(buffer.length / (1024 * 1024)).toFixed(2)}MB)`
+      );
+      return publicUrl;
+    } catch (error) {
+      logger.error(`Failed to upload GIF to R2, falling back to local storage:`, error.message);
+      logger.error(`R2 upload error details:`, error);
+      // Fall through to local storage
+    }
+  }
+
+  // Fallback to local disk
   const _basePath = getStoragePath(storagePath);
   const gifPath = getGifPath(hash, storagePath);
 
@@ -166,10 +223,20 @@ export function getVideoPath(hash, extension, storagePath) {
  * Check if a video with the given hash and extension already exists
  * @param {string} hash - SHA-256 hash of the video
  * @param {string} extension - File extension
- * @param {string} storagePath - Base storage path
+ * @param {string} storagePath - Base storage path (kept for backward compatibility)
  * @returns {Promise<boolean>} True if video exists
  */
 export async function videoExists(hash, extension, storagePath) {
+  // Check R2 first if configured
+  if (
+    r2Config.accountId &&
+    r2Config.accessKeyId &&
+    r2Config.secretAccessKey &&
+    r2Config.bucketName
+  ) {
+    return await videoExistsInR2(hash, extension, r2Config);
+  }
+  // Fallback to local disk check
   try {
     const videoPath = getVideoPath(hash, extension, storagePath);
     await fs.access(videoPath);
@@ -180,14 +247,35 @@ export async function videoExists(hash, extension, storagePath) {
 }
 
 /**
- * Save a video buffer to disk
+ * Save a video buffer to R2 or disk
  * @param {Buffer} buffer - Video file buffer
  * @param {string} hash - SHA-256 hash of the video
  * @param {string} extension - File extension (e.g., '.mp4', '.webm')
- * @param {string} storagePath - Base storage path
- * @returns {Promise<string>} Path to saved video file
+ * @param {string} storagePath - Base storage path (for local fallback)
+ * @param {string|null} [userId=null] - Optional Discord user ID to attach as metadata
+ * @returns {Promise<string>} Public URL or path to saved video file
  */
-export async function saveVideo(buffer, hash, extension, storagePath) {
+export async function saveVideo(buffer, hash, extension, storagePath, userId = null) {
+  // Upload to R2 if configured
+  if (
+    r2Config.accountId &&
+    r2Config.accessKeyId &&
+    r2Config.secretAccessKey &&
+    r2Config.bucketName
+  ) {
+    try {
+      const publicUrl = await uploadVideoToR2(buffer, hash, extension, r2Config, userId);
+      logger.debug(
+        `Saved video to R2: ${publicUrl} (size: ${(buffer.length / (1024 * 1024)).toFixed(2)}MB)`
+      );
+      return publicUrl;
+    } catch (error) {
+      logger.error(`Failed to upload video to R2, falling back to local storage:`, error.message);
+      // Fall through to local storage
+    }
+  }
+
+  // Fallback to local disk
   const _basePath = getStoragePath(storagePath);
   const videoPath = getVideoPath(hash, extension, storagePath);
 
@@ -222,10 +310,20 @@ export function getImagePath(hash, extension, storagePath) {
  * Check if an image with the given hash and extension already exists
  * @param {string} hash - SHA-256 hash of the image
  * @param {string} extension - File extension
- * @param {string} storagePath - Base storage path
+ * @param {string} storagePath - Base storage path (kept for backward compatibility)
  * @returns {Promise<boolean>} True if image exists
  */
 export async function imageExists(hash, extension, storagePath) {
+  // Check R2 first if configured
+  if (
+    r2Config.accountId &&
+    r2Config.accessKeyId &&
+    r2Config.secretAccessKey &&
+    r2Config.bucketName
+  ) {
+    return await imageExistsInR2(hash, extension, r2Config);
+  }
+  // Fallback to local disk check
   try {
     const imagePath = getImagePath(hash, extension, storagePath);
     await fs.access(imagePath);
@@ -236,14 +334,35 @@ export async function imageExists(hash, extension, storagePath) {
 }
 
 /**
- * Save an image buffer to disk
+ * Save an image buffer to R2 or disk
  * @param {Buffer} buffer - Image file buffer
  * @param {string} hash - SHA-256 hash of the image
  * @param {string} extension - File extension (e.g., '.png', '.jpg')
- * @param {string} storagePath - Base storage path
- * @returns {Promise<string>} Path to saved image file
+ * @param {string} storagePath - Base storage path (for local fallback)
+ * @param {string|null} [userId=null] - Optional Discord user ID to attach as metadata
+ * @returns {Promise<string>} Public URL or path to saved image file
  */
-export async function saveImage(buffer, hash, extension, storagePath) {
+export async function saveImage(buffer, hash, extension, storagePath, userId = null) {
+  // Upload to R2 if configured
+  if (
+    r2Config.accountId &&
+    r2Config.accessKeyId &&
+    r2Config.secretAccessKey &&
+    r2Config.bucketName
+  ) {
+    try {
+      const publicUrl = await uploadImageToR2(buffer, hash, extension, r2Config, userId);
+      logger.debug(
+        `Saved image to R2: ${publicUrl} (size: ${(buffer.length / (1024 * 1024)).toFixed(2)}MB)`
+      );
+      return publicUrl;
+    } catch (error) {
+      logger.error(`Failed to upload image to R2, falling back to local storage:`, error.message);
+      // Fall through to local storage
+    }
+  }
+
+  // Fallback to local disk
   const _basePath = getStoragePath(storagePath);
   const imagePath = getImagePath(hash, extension, storagePath);
 

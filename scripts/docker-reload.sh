@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-PROFILES="--profile webui --profile tunnel"
+PROFILES="--profile webui"
 
 # Colors for output
 RED='\033[0;31m'
@@ -51,7 +51,7 @@ if ! docker compose build --no-cache --pull; then
 fi
 
 # Step 5: Start containers with profiles
-info "Starting containers with profiles: webui, tunnel"
+info "Starting containers with profiles: webui"
 if ! docker compose $PROFILES up -d; then
   error "Failed to start docker compose services"
 fi

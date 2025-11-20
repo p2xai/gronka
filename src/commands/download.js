@@ -86,8 +86,16 @@ async function processDownload(interaction, url) {
     }
 
     if (exists && filePath) {
-      const filename = path.basename(filePath);
-      const fileUrl = `${CDN_BASE_URL.replace('/gifs', cdnPath)}/${filename}`;
+      // filePath might be a local path or R2 URL
+      let fileUrl;
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        // Already an R2 URL
+        fileUrl = filePath;
+      } else {
+        // Local path, construct URL
+        const filename = path.basename(filePath);
+        fileUrl = `${CDN_BASE_URL.replace('/gifs', cdnPath)}/${filename}`;
+      }
       logger.info(`${fileType} already exists (hash: ${hash}) for user ${userId}`);
       await interaction.editReply({
         content: `${fileType} already exists : ${fileUrl}`,
@@ -96,7 +104,7 @@ async function processDownload(interaction, url) {
       // Save file based on type
       if (fileType === 'gif') {
         logger.info(`Saving GIF (hash: ${hash})`);
-        filePath = await saveGif(fileData.buffer, hash, GIF_STORAGE_PATH);
+        filePath = await saveGif(fileData.buffer, hash, GIF_STORAGE_PATH, userId);
 
         // Auto-optimize if enabled in user config
         if (userConfig.autoOptimize) {
@@ -130,18 +138,30 @@ async function processDownload(interaction, url) {
         }
       } else if (fileType === 'video') {
         logger.info(`Saving video (hash: ${hash}, extension: ${ext})`);
-        filePath = await saveVideo(fileData.buffer, hash, ext, GIF_STORAGE_PATH);
+        filePath = await saveVideo(fileData.buffer, hash, ext, GIF_STORAGE_PATH, userId);
       } else if (fileType === 'image') {
         logger.info(`Saving image (hash: ${hash}, extension: ${ext})`);
-        filePath = await saveImage(fileData.buffer, hash, ext, GIF_STORAGE_PATH);
+        filePath = await saveImage(fileData.buffer, hash, ext, GIF_STORAGE_PATH, userId);
       }
 
-      const filename = path.basename(filePath);
-      const fileUrl = `${CDN_BASE_URL.replace('/gifs', cdnPath)}/${filename}`;
+      // filePath might be a local path or R2 URL
+      let fileUrl;
+      let finalSize;
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        // Already an R2 URL
+        fileUrl = filePath;
+        // Get size from buffer since we can't stat R2 files
+        finalSize = fileData.buffer.length;
+      } else {
+        // Local path, construct URL
+        const filename = path.basename(filePath);
+        fileUrl = `${CDN_BASE_URL.replace('/gifs', cdnPath)}/${filename}`;
+        // Get final file size
+        const finalStats = await fs.stat(filePath);
+        finalSize = finalStats.size;
+      }
 
-      // Get final file size
-      const finalStats = await fs.stat(filePath);
-      const finalSizeMB = (finalStats.size / (1024 * 1024)).toFixed(2);
+      const finalSizeMB = (finalSize / (1024 * 1024)).toFixed(2);
 
       logger.info(
         `Successfully saved ${fileType} (hash: ${hash}, size: ${finalSizeMB}MB) for user ${userId}${userConfig.autoOptimize && fileType === 'gif' ? ' [AUTO-OPTIMIZED]' : ''}`
@@ -152,9 +172,9 @@ async function processDownload(interaction, url) {
       // Show optimization info if auto-optimized
       if (userConfig.autoOptimize && fileType === 'gif') {
         const originalSize = fileData.buffer.length;
-        const reduction = calculateSizeReduction(originalSize, finalStats.size);
+        const reduction = calculateSizeReduction(originalSize, finalSize);
         const reductionText = reduction >= 0 ? `-${reduction}%` : `+${Math.abs(reduction)}%`;
-        replyContent = `${fileType} downloaded : ${fileUrl}\n-# ${fileType} size: ${formatSizeMb(finalStats.size)} (${reductionText})`;
+        replyContent = `${fileType} downloaded : ${fileUrl}\n-# ${fileType} size: ${formatSizeMb(finalSize)} (${reductionText})`;
       }
 
       await interaction.editReply({

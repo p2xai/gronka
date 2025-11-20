@@ -6,8 +6,7 @@ import { promisify } from 'util';
 import rateLimit from 'express-rate-limit';
 import { getStorageStats } from './utils/storage.js';
 import { createLogger, formatTimestampSeconds } from './utils/logger.js';
-import { serverConfig } from './utils/config.js';
-import { validateFilename } from './utils/validation.js';
+import { serverConfig, r2Config } from './utils/config.js';
 import { ConfigurationError } from './utils/errors.js';
 
 const execAsync = promisify(exec);
@@ -22,7 +21,6 @@ const {
   serverHost: HOST,
   statsUsername: STATS_USERNAME,
   statsPassword: STATS_PASSWORD,
-  corsOrigin: CORS_ORIGIN,
 } = serverConfig;
 
 const app = express();
@@ -78,13 +76,14 @@ const generalLimiter = rateLimit({
   },
 });
 
-const cdnLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // Higher limit for CDN endpoints (main purpose)
-  message: 'too many requests from this IP, please try again later',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// CDN limiter reserved for future use
+// const cdnLimiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 200, // Higher limit for CDN endpoints (main purpose)
+//   message: 'too many requests from this IP, please try again later',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
 
 const statsLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -237,117 +236,8 @@ app.use(
   })
 );
 
-// Serve 404 cat image for /gifs/ route
-app.get('/gifs', cdnLimiter, (req, res) => {
-  res.type('image/jpeg');
-  res.sendFile(path.join(publicPath, '404.jpg'));
-});
-
-app.get('/gifs/', cdnLimiter, (req, res) => {
-  res.type('image/jpeg');
-  res.sendFile(path.join(publicPath, '404.jpg'));
-});
-
-// Serve 404 cat image for /videos/ route
-app.get('/videos', cdnLimiter, (req, res) => {
-  res.type('image/jpeg');
-  res.sendFile(path.join(publicPath, '404.jpg'));
-});
-
-app.get('/videos/', cdnLimiter, (req, res) => {
-  res.type('image/jpeg');
-  res.sendFile(path.join(publicPath, '404.jpg'));
-});
-
-// Serve 404 cat image for /images/ route
-app.get('/images', cdnLimiter, (req, res) => {
-  res.type('image/jpeg');
-  res.sendFile(path.join(publicPath, '404.jpg'));
-});
-
-app.get('/images/', cdnLimiter, (req, res) => {
-  res.type('image/jpeg');
-  res.sendFile(path.join(publicPath, '404.jpg'));
-});
-
-// Helper function to serve files from a subdirectory
-async function serveFileFromSubdirectory(req, res, subdirectory, defaultContentType) {
-  const filename = req.params.filename;
-  const subdirectoryPath = path.join(storagePath, subdirectory);
-
-  // Validate filename to prevent path traversal
-  const validation = validateFilename(filename, subdirectoryPath);
-  if (!validation.valid) {
-    logger.warn(`Invalid filename attempt: ${filename} - ${validation.error}`);
-    res.status(400);
-    res.type('image/jpeg');
-    res.sendFile(path.join(publicPath, '404.jpg'));
-    return;
-  }
-
-  const filePath = validation.filePath;
-
-  try {
-    // Check if file exists
-    await fs.access(filePath);
-
-    // Determine content type based on file extension
-    const ext = path.extname(filename).toLowerCase();
-    let contentType = defaultContentType;
-
-    if (ext === '.gif') {
-      contentType = 'image/gif';
-    } else if (ext === '.mp4') {
-      contentType = 'video/mp4';
-    } else if (ext === '.webm') {
-      contentType = 'video/webm';
-    } else if (ext === '.mov') {
-      contentType = 'video/quicktime';
-    } else if (ext === '.avi') {
-      contentType = 'video/x-msvideo';
-    } else if (ext === '.mkv') {
-      contentType = 'video/x-matroska';
-    } else if (ext === '.png') {
-      contentType = 'image/png';
-    } else if (ext === '.jpg' || ext === '.jpeg') {
-      contentType = 'image/jpeg';
-    } else if (ext === '.webp') {
-      contentType = 'image/webp';
-    } else if (ext === '.mp3') {
-      contentType = 'audio/mpeg';
-    } else if (ext === '.m4a') {
-      contentType = 'audio/mp4';
-    }
-
-    // File exists, serve it with proper headers
-    logger.debug(`Serving file: ${filename} from ${subdirectory} (${contentType})`);
-    res.set('Cache-Control', 'public, max-age=604800, immutable');
-    res.set('Access-Control-Allow-Origin', CORS_ORIGIN);
-    res.set('Content-Type', contentType);
-    res.sendFile(filePath);
-  } catch {
-    // File doesn't exist, serve cat image
-    logger.warn(`File not found: ${filename} in ${subdirectory}`);
-    res.status(404);
-    res.type('image/jpeg');
-    res.sendFile(path.join(publicPath, '404.jpg'));
-  }
-}
-
-// Custom handler for /gifs/* requests - check if file exists, serve cat image if not
-app.get('/gifs/:filename', cdnLimiter, async (req, res) => {
-  await serveFileFromSubdirectory(req, res, 'gifs', 'image/gif');
-});
-
-// Custom handler for /videos/* requests
-app.get('/videos/:filename', cdnLimiter, async (req, res) => {
-  await serveFileFromSubdirectory(req, res, 'videos', 'video/mp4');
-});
-
-// Custom handler for /images/* requests
-app.get('/images/:filename', cdnLimiter, async (req, res) => {
-  await serveFileFromSubdirectory(req, res, 'images', 'image/png');
-});
+// Files are now served directly from R2, so these routes are removed
+// /gifs/*, /videos/*, /images/* routes removed - files served from R2
 
 /**
  * Check if FFmpeg is available
@@ -523,11 +413,28 @@ app.get('/privacy', (req, res) => {
   res.sendFile(path.join(publicPath, 'privacy.html'));
 });
 
-// 404 handler - serve cat image for all unmatched routes
+// Get 404 cat image URL from R2 or fallback to local
+function get404CatImageUrl() {
+  if (r2Config.publicDomain) {
+    return `https://${r2Config.publicDomain}/404.jpg`;
+  }
+  // Fallback: return local path (will be served as redirect or direct file)
+  return path.join(publicPath, '404.jpg');
+}
+
+// 404 handler - redirect to R2 cat image URL or serve locally
 app.use((req, res) => {
   res.status(404);
-  res.type('image/jpeg');
-  res.sendFile(path.join(publicPath, '404.jpg'));
+  const catImageUrl = get404CatImageUrl();
+
+  // If it's an R2 URL, redirect to it
+  if (catImageUrl.startsWith('http')) {
+    res.redirect(catImageUrl);
+  } else {
+    // Fallback to local file serving
+    res.type('image/jpeg');
+    res.sendFile(catImageUrl);
+  }
 });
 
 // Validate configuration

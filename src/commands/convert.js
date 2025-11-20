@@ -20,7 +20,7 @@ import {
   validateImageAttachment,
 } from '../utils/attachment-helpers.js';
 import { convertToGif, getVideoMetadata, convertImageToGif } from '../utils/video-processor.js';
-import { gifExists, getGifPath, cleanupTempFiles } from '../utils/storage.js';
+import { gifExists, getGifPath, cleanupTempFiles, saveGif } from '../utils/storage.js';
 import { getUserConfig } from '../utils/user-config.js';
 import { trackRecentConversion } from '../utils/user-tracking.js';
 import { optimizeGif, calculateSizeReduction, formatSizeMb } from '../utils/gif-optimizer.js';
@@ -245,14 +245,23 @@ export async function processConversion(
     }
 
     // Read the generated GIF to verify it was created (or read existing one)
-    const gifBuffer = await fs.readFile(gifPath);
+    let gifBuffer = await fs.readFile(gifPath);
     const originalSize = gifBuffer.length;
+
+    // Upload initial GIF to R2 if not already uploaded (always upload to ensure it's in R2)
+    let initialGifUrl = null;
+    try {
+      initialGifUrl = await saveGif(gifBuffer, hash, GIF_STORAGE_PATH, userId);
+    } catch (error) {
+      logger.warn(`Failed to upload initial GIF to R2, continuing:`, error.message);
+    }
 
     // Check if optimization is requested
     let finalHash = hash;
     let _finalGifPath = gifPath;
     let optimizedSize = originalSize;
     let wasAutoOptimized = false;
+    let finalGifUrl = initialGifUrl;
 
     if (options.optimize) {
       // Generate hash for optimized file (include lossy level in hash for uniqueness)
@@ -275,6 +284,8 @@ export async function processConversion(
         optimizedSize = optimizedBuffer.length;
         finalHash = optimizedHashValue;
         _finalGifPath = optimizedGifPath;
+        // Upload optimized version to R2 if not already there
+        finalGifUrl = await saveGif(optimizedBuffer, optimizedHashValue, GIF_STORAGE_PATH, userId);
       } else {
         // Optimize the GIF with specified lossy level
         const optimizeOptions =
@@ -289,6 +300,8 @@ export async function processConversion(
         optimizedSize = optimizedBuffer.length;
         finalHash = optimizedHashValue;
         _finalGifPath = optimizedGifPath;
+        // Upload optimized version to R2
+        finalGifUrl = await saveGif(optimizedBuffer, optimizedHashValue, GIF_STORAGE_PATH, userId);
       }
     } else if (userConfig.autoOptimize) {
       // Auto-optimize if enabled in user config
@@ -310,6 +323,8 @@ export async function processConversion(
         finalHash = optimizedHashValue;
         _finalGifPath = optimizedGifPath;
         wasAutoOptimized = true;
+        // Upload optimized version to R2 if not already there
+        finalGifUrl = await saveGif(optimizedBuffer, optimizedHashValue, GIF_STORAGE_PATH, userId);
       } else {
         // Auto-optimize the GIF with default lossy level
         logger.info(`Auto-optimizing GIF: ${gifPath} -> ${optimizedGifPath} (lossy: 35)`);
@@ -321,11 +336,20 @@ export async function processConversion(
         finalHash = optimizedHashValue;
         _finalGifPath = optimizedGifPath;
         wasAutoOptimized = true;
+        // Upload optimized version to R2
+        finalGifUrl = await saveGif(optimizedBuffer, optimizedHashValue, GIF_STORAGE_PATH, userId);
       }
     }
 
-    // Generate final URL
-    const gifUrl = `${CDN_BASE_URL}/${finalHash}.gif`;
+    // Generate final URL - use R2 URL if available, otherwise construct from CDN_BASE_URL
+    let gifUrl;
+    if (finalGifUrl && (finalGifUrl.startsWith('http://') || finalGifUrl.startsWith('https://'))) {
+      // Already an R2 URL
+      gifUrl = finalGifUrl;
+    } else {
+      // Fallback to constructing URL from CDN_BASE_URL
+      gifUrl = `${CDN_BASE_URL}/${finalHash}.gif`;
+    }
 
     // Track recent conversion
     trackRecentConversion(userId, gifUrl);

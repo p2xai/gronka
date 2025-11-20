@@ -8,7 +8,7 @@ services:
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - CLIENT_ID=${CLIENT_ID}
-      - CDN_BASE_URL=${CDN_BASE_URL:-http://localhost:3000/gifs}
+      - CDN_BASE_URL=${CDN_BASE_URL:-https://cdn.gronka.p1x.dev/gifs}
       - SERVER_PORT=3000
       - GIF_STORAGE_PATH=./data
       - MAX_GIF_WIDTH=${MAX_GIF_WIDTH:-720}
@@ -19,6 +19,11 @@ services:
       - STATS_PASSWORD=${STATS_PASSWORD:-}
       - COBALT_API_URL=${COBALT_API_URL:-http://cobalt:9000}
       - COBALT_ENABLED=${COBALT_ENABLED:-true}
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_BUCKET_NAME=${R2_BUCKET_NAME:-}
+      - R2_PUBLIC_DOMAIN=${R2_PUBLIC_DOMAIN:-cdn.gronka.p1x.dev}
     volumes:
       - ./data:/app/data
       - ./temp:/app/temp
@@ -54,7 +59,7 @@ services:
       - STATS_USERNAME=${STATS_USERNAME:-}
       - STATS_PASSWORD=${STATS_PASSWORD:-}
     ports:
-      # Accessible from all interfaces on host machine (server-ip:3001), not exposed via cloudflared
+      # Accessible from all interfaces on host machine (server-ip:3001)
       - '3001:3001'
     networks:
       - gronka-network
@@ -64,30 +69,6 @@ services:
     profiles:
       - webui
     # Note: Start with: docker compose --profile webui up
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared-tunnel
-    restart: unless-stopped
-    # Use config file for ingress rules
-    # TUNNEL_TOKEN env var will be used if set, otherwise config file credentials will be used
-    command: tunnel --config /etc/cloudflared/config.yml run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
-    volumes:
-      - ./config/cloudflared-config.yml:/etc/cloudflared/config.yml:ro
-      - ./config/credentials.json:/etc/cloudflared/credentials.json:ro
-    networks:
-      - gronka-network
-    depends_on:
-      app:
-        condition: service_healthy
-    profiles:
-      - tunnel
-    # Note: Start with: docker compose --profile tunnel up
-    deploy:
-      restart_policy:
-        condition: on-failure
 
   cobalt:
     image: ghcr.io/imputnet/cobalt:11
@@ -144,9 +125,6 @@ services:
   #     - com.centurylinklabs.watchtower.scope=cobalt
   #   networks:
   #     - gronka-network
-
-volumes:
-  cloudflared-credentials:
 
 networks:
   gronka-network:

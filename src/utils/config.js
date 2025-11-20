@@ -95,7 +95,7 @@ function getCorsOrigin() {
     return explicitOrigin.trim();
   }
 
-  const cdnBaseUrl = getStringEnv('CDN_BASE_URL', 'http://localhost:3000/gifs');
+  const cdnBaseUrl = getStringEnv('CDN_BASE_URL', 'https://cdn.gronka.p1x.dev/gifs');
   try {
     const url = new URL(cdnBaseUrl);
     // If localhost, allow all origins
@@ -138,7 +138,7 @@ function getBotConfig() {
     clientId: requireStringEnv('CLIENT_ID', 'Discord application/client ID'),
     adminUserIds: parseIdList('ADMIN_USER_IDS'),
     gifStoragePath: getStringEnv('GIF_STORAGE_PATH', './data'),
-    cdnBaseUrl: getStringEnv('CDN_BASE_URL', 'http://localhost:3000/gifs'),
+    cdnBaseUrl: getStringEnv('CDN_BASE_URL', 'https://cdn.gronka.p1x.dev/gifs'),
     maxGifWidth: parseIntEnv('MAX_GIF_WIDTH', 720, 1, 4096),
     maxGifDuration: parseIntEnv('MAX_GIF_DURATION', 30, 1, 300),
     defaultFps: parseIntEnv('DEFAULT_FPS', 15, 1, 120),
@@ -176,6 +176,15 @@ export const botConfig = new Proxy(
   }
 );
 
+// R2 configuration
+export const r2Config = {
+  accountId: getStringEnv('R2_ACCOUNT_ID', ''),
+  accessKeyId: getStringEnv('R2_ACCESS_KEY_ID', ''),
+  secretAccessKey: getStringEnv('R2_SECRET_ACCESS_KEY', ''),
+  bucketName: getStringEnv('R2_BUCKET_NAME', ''),
+  publicDomain: getStringEnv('R2_PUBLIC_DOMAIN', 'cdn.gronka.p1x.dev'),
+};
+
 // Server configuration
 export const serverConfig = {
   gifStoragePath: getStringEnv('GIF_STORAGE_PATH', './data'),
@@ -184,7 +193,7 @@ export const serverConfig = {
   statsUsername: getStringEnv('STATS_USERNAME', null),
   statsPassword: getStringEnv('STATS_PASSWORD', null),
   corsOrigin: getCorsOrigin(),
-  cdnBaseUrl: getStringEnv('CDN_BASE_URL', 'http://localhost:3000/gifs'),
+  cdnBaseUrl: getStringEnv('CDN_BASE_URL', 'https://cdn.gronka.p1x.dev/gifs'),
 };
 
 // Validate CDN_BASE_URL format for server
@@ -243,4 +252,5 @@ export const config = {
   server: serverConfig,
   webui: webuiConfig,
   logger: loggerConfig,
+  r2: r2Config,
 };
