@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import Stats from './Stats.svelte';
   import Health from './Health.svelte';
   import Operations from './Operations.svelte';
@@ -9,7 +10,27 @@
 
   function setTab(tab) {
     activeTab = tab;
+    // Update URL without page reload
+    const url = tab === 'dashboard' ? '/' : `/${tab}`;
+    window.history.pushState({ tab }, '', url);
   }
+
+  function getTabFromPath() {
+    const path = window.location.pathname;
+    if (path === '/logs') return 'logs';
+    if (path === '/metrics') return 'metrics';
+    return 'dashboard';
+  }
+
+  onMount(() => {
+    // Set initial tab from URL
+    activeTab = getTabFromPath();
+
+    // Handle browser back/forward buttons
+    window.addEventListener('popstate', () => {
+      activeTab = getTabFromPath();
+    });
+  });
 </script>
 
 <main>
@@ -17,27 +38,30 @@
     <div class="header-content">
       <h1>gronka</h1>
       <nav class="tabs">
-        <button
+        <a
+          href="/"
           class="tab"
           class:active={activeTab === 'dashboard'}
-          on:click={() => setTab('dashboard')}
+          on:click|preventDefault={() => setTab('dashboard')}
         >
           dashboard
-        </button>
-        <button
+        </a>
+        <a
+          href="/logs"
           class="tab"
           class:active={activeTab === 'logs'}
-          on:click={() => setTab('logs')}
+          on:click|preventDefault={() => setTab('logs')}
         >
           logs
-        </button>
-        <button
+        </a>
+        <a
+          href="/metrics"
           class="tab"
           class:active={activeTab === 'metrics'}
-          on:click={() => setTab('metrics')}
+          on:click|preventDefault={() => setTab('metrics')}
         >
           metrics
-        </button>
+        </a>
       </nav>
     </div>
   </header>
@@ -110,6 +134,8 @@
     border-radius: 3px;
     transition: all 0.2s;
     font-weight: 500;
+    text-decoration: none;
+    display: inline-block;
   }
 
   .tab:hover {

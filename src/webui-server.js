@@ -273,9 +273,7 @@ app.get('/api/logs', (req, res) => {
       if (Array.isArray(level)) {
         // Multiple level parameters: flatten and trim all values
         options.level = level.flatMap(l =>
-          typeof l === 'string'
-            ? l.split(',').map(sub => sub.trim())
-            : []
+          typeof l === 'string' ? l.split(',').map(sub => sub.trim()) : []
         );
       } else if (typeof level === 'string') {
         if (level.includes(',')) {
